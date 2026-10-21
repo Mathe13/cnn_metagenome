@@ -13,10 +13,10 @@
 ## Handoff
 
 **Feature**: s01-inventory-and-vertical-slice
-**Where**: planning phase - awaiting human review of plan.md
-**In progress**: `.specs/features/s01-inventory-and-vertical-slice/plan.md`
-**Next step**: Present plan to user for review
+**Where**: C1-C8 closed at 3ae1a73 and verified (PASS)
+**In progress**: none
+**Next step**: S02 — Proveniência do dataset e auditoria do split por fragmento
 **Blockers**: none
-**Uncommitted**: `docs/inventory.md`, `.specs/STATE.md`
+**Uncommitted**: none
 **Branch**: main
 

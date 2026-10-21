@@ -61,3 +61,7 @@ Proof: `.venv/bin/python3 -m unittest discover -s tests -k test_invalid_inputs_e
 ## Handoff
 
 - S1 = 5k in docs and inventory; S2 = 9k in src/viral_cnn, scripts, and tests. Total = 14k tokens, under the 150k budget - one builder
+
+- **Boundary:** C1-C8 closed at `3ae1a73`
+- **Settled mid-build:** User confirmed checkpoint and Parquet files reside on a remote Jupyter server; local verification executed via synthetic deterministic contracts and parity proofs against historical code.
+- **Abandoned:** none
