@@ -54,28 +54,39 @@ O repositório possui 15 notebooks divididos entre `short/` (classificação de 
 - `dataset_kraken/family_seqs.csv` (401 MB: `sequence,label`)
 - `paper/BioData_Minning___Matheus.pdf` (Manuscrito completo compilado)
 
-### 4.2 Artefatos Externos / Checkpoints Ausentes no Repositório Atual
-Os seguintes caminhos são referenciados nos notebooks históricos, mas **não se encontram no disco local**:
-1. **Checkpoints de Espécie:**
-   - `../cnn_kraken_species/checkpoints/best_resnet_classifier__fast_phase4.pt` (ResNet50 limpo)
-   - `./checkpoint_finetune_resnet/finetune_noise_14.pt` (ResNet50 com fine-tuning de ruído)
-   - `./checkpoint_species_conv_zero/best_convnext_phase3_restarts_v2.pt` (ConvNeXt_Z do zero)
-   - `./checkpoint_transfer_species_conv/best_convnext_classifier_fast_phase4_2_restarts.pt` (ConvNeXt_T transferido)
-   - `./checkpoint_transfer_species_conv/finetune_noise_7.pt` (ConvNeXt_F com fine-tuning de ruído)
-2. **Checkpoints de Gênero:**
-   - `../cnn_kraken_genus/best_resnet_classifier__fast_phase4.pt` (ResNet50 Gênero)
-   - `../cnn_kraken/checkpoint_genus_conv/best_convnext_classifier_fast_phase4_2.pt` (ConvNeXt Gênero)
-3. **Partições Pré-processadas em Parquet:**
-   - `./processed_kraken_species_splited_parquet/` (`train/`, `validation/`, `test/`)
-   - `./processed_kraken_genus_splited_parquet/`
-   - `./processed_ncbi_splited_parquet/`
-4. **Bases Taxonômicas Intermediárias:**
-   - `main_taxonomy_hybrid_CLEANSED.parquet`
-   - `data_taxonomy_parquet/main_df.parquet`
-   - `ICTV_Master_Species_List_2025_MSL41.v1.xlsx`
+### 4.2 Artefatos e Checkpoints no Armazenamento do JupyterHub Remoto (AD-006)
+Conforme formalizado na decisão **AD-006**, os dados volumosos, partições Parquet e checkpoints `.pt` residem no armazenamento do cluster/JupyterHub remoto, mantendo o repositório Git leve. Os caminhos identificados nos notebooks resolvem diretamente na seguinte topologia do JupyterHub:
 
-> **Registro de Bloqueio Conforme AGENTS.md:**
-> Como os arquivos `.pt` e as partições Parquet divididas não estão presentes no ambiente atual, a reprodução de inferência real sobre dados de teste fica bloqueada até a provisão desses artefatos. A validação do fluxo extraído na S01 deve operar em conformidade com o critério de aceitação de AGENTS.md: validação de contratos sintéticos, verificação estrita de invariantes (ordem A/C/G/T, padding nulo, formas de entrada/saída) e execução de lote pequeno com pesos determinísticos/sintéticos.
+```text
+.
+├── cnn_kraken/
+│   ├── checkpoint_finetune_resnet/finetune_noise_14.pt
+│   ├── checkpoint_species_conv_zero/best_convnext_phase3_restarts_v2.pt
+│   ├── checkpoint_transfer_species_conv/
+│   │   ├── best_convnext_classifier_fast_phase4_2_restarts.pt
+│   │   └── finetune_noise_7.pt
+│   ├── checkpoint_genus_conv/best_convnext_classifier_fast_phase4_2.pt
+│   ├── processed_kraken_species_splited_parquet/{train, validation, test}/ (part.0.parquet .. part.255.parquet)
+│   ├── processed_kraken_genus_splited_parquet/{train, validation, test}/
+│   ├── benchmark_kraken_blast_20_per_species/ (exact_overlap.csv, blast_db, kraken_db)
+│   ├── data_taxonomy_parquet/main_df.parquet
+│   └── results_reports/, results_motifs/, results_latent/, results_robustness/
+├── cnn_kraken_species/
+│   ├── checkpoints/best_resnet_classifier__fast_phase4.pt
+│   └── processed_kraken_species_splited_parquet/
+├── cnn_kraken_genus/
+│   ├── best_resnet_classifier__fast_phase4.pt
+│   └── processed_kraken_genus_splited_parquet/
+├── dataset_kraken/
+│   └── *seqs.csv / *name_ids.csv
+└── dataset_split_parquet/
+    └── {train.parquet, val.parquet, test.parquet}
+```
+
+> **Registro de Bloqueio Conforme AGENTS.md e Diretriz de Execução Remota (AD-005 e AD-006):**
+> Como os arquivos `.pt` e as partições Parquet completas residem no ambiente de pesquisa/JupyterHub remoto (AD-006), o repositório Git local opera com contratos sintéticos (AD-005).
+> 1. **Ambiente Local:** O código em `src/viral_cnn`, scripts e testes automatizados utilizam fixtures determinísticos pequenos em `tests/fixtures/` e contratos sintéticos, executando em poucos segundos sem dependência de GPU ou arquivos gigabyte.
+> 2. **Ambiente Remoto (JupyterHub / Kernel Remoto):** Para inferência real, reprodução exata das tabelas e fine-tuning com GPU, os caminhos são parametrizados via arquivos YAML em `configs/` ou variável de ambiente `DATA_ROOT`, sem caminhos absolutos pessoais hardcoded no código-fonte.
 
 ---
 

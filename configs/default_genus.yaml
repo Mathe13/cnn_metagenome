@@ -19,6 +19,11 @@ models:
     dropout_rate: 0.3
 
 data:
+  data_root: "." # Override via environment variable DATA_ROOT or CLI
   taxonomy_mapping: "dataset_kraken/genus_name_ids.csv"
   raw_sequences: "dataset_kraken/genus_seqs.csv"
+  parquet_splits_dir: "cnn_kraken/processed_kraken_genus_splited_parquet"
+  checkpoints:
+    resnet: "cnn_kraken_genus/best_resnet_classifier__fast_phase4.pt"
+    convnext: "cnn_kraken/checkpoint_genus_conv/best_convnext_classifier_fast_phase4_2.pt"
 
