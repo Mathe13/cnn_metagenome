@@ -14,10 +14,10 @@
 
 ## Handoff
 
-**Feature**: s02-dataset-provenance-and-split-audit
-**Where**: C1-C9 closed at 72a1755 and verified (PASS)
+**Feature**: s03-genome-disjoint-evaluation-feasibility
+**Where**: C1-C10 closed at bde7d0e and verified (PASS)
 **In progress**: none
-**Next step**: S03 — Viabilidade de avaliação por genoma de origem
+**Next step**: S04 — Registro de modelos, mapeamentos e treinamento
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
