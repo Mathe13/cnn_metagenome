@@ -1,0 +1,24 @@
+task: "closed_set_genus_classification"
+rank: "genus"
+num_classes: 2702
+window_size: 512
+stride: 256
+channels:
+  - "A"
+  - "C"
+  - "G"
+  - "T"
+pad_value: 0.0
+
+models:
+  resnet50_1d:
+    architecture: "resnet50_1d"
+    dropout_rate: 0.3
+  convnext_tiny_1d:
+    architecture: "convnext_tiny_1d"
+    dropout_rate: 0.3
+
+data:
+  taxonomy_mapping: "dataset_kraken/genus_name_ids.csv"
+  raw_sequences: "dataset_kraken/genus_seqs.csv"
+

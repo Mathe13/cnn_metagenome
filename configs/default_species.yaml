@@ -1,0 +1,24 @@
+task: "closed_set_species_classification"
+rank: "species"
+num_classes: 13683
+window_size: 512
+stride: 256
+channels:
+  - "A"
+  - "C"
+  - "G"
+  - "T"
+pad_value: 0.0
+
+models:
+  resnet50_1d:
+    architecture: "resnet50_1d"
+    dropout_rate: 0.3
+  convnext_tiny_1d:
+    architecture: "convnext_tiny_1d"
+    dropout_rate: 0.3
+
+data:
+  taxonomy_mapping: "dataset_kraken/species_name_ids.csv"
+  raw_sequences: "dataset_kraken/species_seqs.csv"
+
