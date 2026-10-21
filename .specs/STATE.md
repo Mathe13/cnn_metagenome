@@ -13,10 +13,10 @@
 
 ## Handoff
 
-**Feature**: s01-inventory-and-vertical-slice
-**Where**: C1-C8 closed at 3ae1a73 and verified (PASS)
+**Feature**: s02-dataset-provenance-and-split-audit
+**Where**: C1-C9 closed at 72a1755 and verified (PASS)
 **In progress**: none
-**Next step**: S02 — Proveniência do dataset e auditoria do split por fragmento
+**Next step**: S03 — Viabilidade de avaliação por genoma de origem
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
