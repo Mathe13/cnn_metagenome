@@ -10,6 +10,7 @@
 | AD-004 | Preserve historical notebooks in original locations without in-place breaking moves | Guarantees auditability and prevents silent corruption of notebook experiments; new code extracted cleanly into `src/` and `scripts/`. | active | 2026-10-21 |
 | AD-005 | Synthetic contract verification when model weights (`.pt`) or parquet splits are unavailable on disk | Manuscript artifacts (.pt checkpoints) are missing from local filesystem; synthetic deterministic contracts verify pipeline mechanics without faking weights. | active | 2026-10-21 |
 | AD-006 | Dados volumosos e checkpoints residem no armazenamento do JupyterHub remoto | Preserva o repositório Git leve, viabiliza execução em GPU com Dask/cuDF no JupyterHub remoto, e parametriza caminhos via `configs/` ou variável `DATA_ROOT`. | active | 2026-10-21 |
+| AD-007 | Avaliação supervisionada closed-set desincorporada de genoma exige $\ge 2$ genomas por espécie | Espécies com genoma único são inviáveis para teste desincorporado de genoma sem vazamento ou violação closed-set; acurácias sob split agrupado refletem população reduzida e não podem ser confrontadas diretamente com o split de fragmentos (13.683 classes) sem explicitar a mudança de suporte. | active | 2026-10-21 |
 
 ## Handoff
 
