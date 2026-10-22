@@ -25,6 +25,15 @@ from .latent import (
     audit_classifier_bottleneck,
     export_umap_projection,
 )
+from .calibration import (
+    CalibrationMetrics,
+    ReliabilityDiagramBin,
+    compute_calibration_metrics,
+    compute_reliability_diagram,
+    save_reliability_diagram,
+    TemperatureScaler,
+    audit_model_calibration_by_noise,
+)
 
 __all__ = [
     "inject_noise",
@@ -45,4 +54,11 @@ __all__ = [
     "LinearProbeClassifier",
     "audit_classifier_bottleneck",
     "export_umap_projection",
+    "CalibrationMetrics",
+    "ReliabilityDiagramBin",
+    "compute_calibration_metrics",
+    "compute_reliability_diagram",
+    "save_reliability_diagram",
+    "TemperatureScaler",
+    "audit_model_calibration_by_noise",
 ]
