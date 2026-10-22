@@ -147,3 +147,4 @@ def parse_blast_output(
                 results[qid] = []
 
     return results
+

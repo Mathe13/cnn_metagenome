@@ -113,3 +113,4 @@ Proof: `.venv/bin/python3 -m unittest discover -s tests -k test_kmer_centroid_cl
 - S1 = 5k in baseline parsers and taxonomy conversion; S2 = 6k in overlap audit and metric evaluation; S3 = 5k in paired discordance and cluster bootstrap; S4 = 6k in long-read integration and stratification; S5 = 8k in CLI runner, protocol documentation, and k-mer baseline. Total = ~30k tokens, well under the 150k budget - one builder
 
 - **Mechanism:** one builder
+

@@ -88,3 +88,4 @@ class KmerCentroidClassifier:
             predictions.append(int(self.classes_[best_idx]))
 
         return np.asarray(predictions, dtype=np.int64)
+
