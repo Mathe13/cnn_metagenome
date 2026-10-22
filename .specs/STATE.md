@@ -11,14 +11,14 @@
 | AD-005 | Synthetic contract verification when model weights (`.pt`) or parquet splits are unavailable on disk | Manuscript artifacts (.pt checkpoints) are missing from local filesystem; synthetic deterministic contracts verify pipeline mechanics without faking weights. | active | 2026-10-21 |
 | AD-006 | Dados volumosos e checkpoints residem no armazenamento do JupyterHub remoto | Preserva o repositório Git leve, viabiliza execução em GPU com Dask/cuDF no JupyterHub remoto, e parametriza caminhos via `configs/` ou variável `DATA_ROOT`. | active | 2026-10-21 |
 | AD-007 | Avaliação supervisionada closed-set desincorporada de genoma exige $\ge 2$ genomas por espécie | Espécies com genoma único são inviáveis para teste desincorporado de genoma sem vazamento ou violação closed-set; acurácias sob split agrupado refletem população reduzida e não podem ser confrontadas diretamente com o split de fragmentos (13.683 classes) sem explicitar a mudança de suporte. | active | 2026-10-21 |
+| AD-008 | Registro canônico de modelos com validação de cabeça e hiperparâmetros não evidenciados explicitamente rotulados como unverified | Normalização unificada para bare state_dict e wrapper model_state_dict, remoção do prefixo _orig_mod. e checagem rígida de dimensão de classes (fc.weight) impedem misturas de ranks; lacunas históricas permanecem unverified conforme AGENTS.md. | active | 2026-10-21 |
 
 ## Handoff
 
-**Feature**: s03-genome-disjoint-evaluation-feasibility
-**Where**: C1-C10 closed at bde7d0e and verified (PASS)
+**Feature**: s04-model-registry-and-training-manifest
+**Where**: C1-C11 closed at 50db814 and verified (PASS)
 **In progress**: none
-**Next step**: S04 — Registro de modelos, mapeamentos e treinamento
+**Next step**: S05 — Pipeline de inferência por janelas e agregação
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
-

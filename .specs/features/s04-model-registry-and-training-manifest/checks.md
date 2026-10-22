@@ -75,3 +75,4 @@ Proof: `.venv/bin/python3 -m unittest discover -s tests -k test_model_registry_d
 - S1 = 3k in docs; S2 = 7k in src/viral_cnn/models/registry.py and tests; S3 = 5k in configs, scripts, and fixtures. Total = ~15k tokens, well under the 150k budget - one builder
 
 - **Mechanism:** one builder
+

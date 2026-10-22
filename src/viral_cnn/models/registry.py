@@ -309,3 +309,4 @@ def build_registered_model(
 
     model.to(device)
     return model
+
