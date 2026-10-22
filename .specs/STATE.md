@@ -22,8 +22,8 @@
 ## Handoff
 
 **Feature**: s10-motifs-composition-and-triplets
-**Where**: C1-C25 implemented and passing test suite (25/25 checks green)
-**In progress**: verification dispatch
+**Where**: C1-C25 implemented and verified; verification report approved (25/25 checks passed)
+**In progress**: none
 **Next step**: S11 — Regeneração de tabelas/figuras e revisão final do manuscrito
 **Blockers**: none
 **Uncommitted**: none
