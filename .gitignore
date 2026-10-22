@@ -9,5 +9,12 @@ dist/
 build/
 .ipynb_checkpoints/
 dataset_kraken/*_seqs.csv
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
 
 
