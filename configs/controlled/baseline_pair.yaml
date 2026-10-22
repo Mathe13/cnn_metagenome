@@ -1,0 +1,31 @@
+# Controlled Cross-Architecture Training Experiment Configuration
+# Defines strictly matched hyperparameters between ResNet50-1D and ConvNeXt-Tiny-1D
+# No personal or absolute filesystem paths.
+
+controlled_experiment:
+  architectures:
+    - "resnet50_1d"
+    - "convnext_tiny_1d"
+  num_classes: 13683
+  window_size: 512
+  channels:
+    - "A"
+    - "C"
+    - "G"
+    - "T"
+  max_steps: 200
+  batch_size: 32
+  learning_rate: 5.0e-5
+  weight_decay: 1.0e-4
+  warmup_steps: 20
+  label_smoothing: 0.1
+  dropout_rate: 0.5
+  noise_rate: 0.0
+  seeds:
+    - 42
+    - 43
+    - 44
+  checkpoint_metric: "best_val_macro_f1"
+  eval_interval_steps: 50
+  amp: true
+  grad_clip_norm: 1.0
