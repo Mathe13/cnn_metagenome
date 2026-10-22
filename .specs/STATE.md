@@ -12,13 +12,14 @@
 | AD-006 | Dados volumosos e checkpoints residem no armazenamento do JupyterHub remoto | Preserva o repositório Git leve, viabiliza execução em GPU com Dask/cuDF no JupyterHub remoto, e parametriza caminhos via `configs/` ou variável `DATA_ROOT`. | active | 2026-10-21 |
 | AD-007 | Avaliação supervisionada closed-set desincorporada de genoma exige $\ge 2$ genomas por espécie | Espécies com genoma único são inviáveis para teste desincorporado de genoma sem vazamento ou violação closed-set; acurácias sob split agrupado refletem população reduzida e não podem ser confrontadas diretamente com o split de fragmentos (13.683 classes) sem explicitar a mudança de suporte. | active | 2026-10-21 |
 | AD-008 | Registro canônico de modelos com validação de cabeça e hiperparâmetros não evidenciados explicitamente rotulados como unverified | Normalização unificada para bare state_dict e wrapper model_state_dict, remoção do prefixo _orig_mod. e checagem rígida de dimensão de classes (fc.weight) impedem misturas de ranks; lacunas históricas permanecem unverified conforme AGENTS.md. | active | 2026-10-21 |
+| AD-009 | Protocolo de ruído com taxa efetiva $3\epsilon/4$, faixas contínuas de F1 e métricas vetorizadas | O ressorteio uniforme entre A/C/G/T produz taxa efetiva $3\epsilon/4$; faixas de F1 cobrem o intervalo [0, 1] continuamente conservando o número de classes; cálculo exato de F1 vetorizado via bincount dispensa dependências externas pesadas e preserva correspondência com o paper. | active | 2026-10-21 |
 
 ## Handoff
 
-**Feature**: s04-model-registry-and-training-manifest
-**Where**: C1-C11 closed at 50db814 and verified (PASS)
+**Feature**: s05-clean-evaluation-and-controlled-noise
+**Where**: C1-C11 closed at 7c4771b and verified (PASS)
 **In progress**: none
-**Next step**: S05 — Pipeline de inferência por janelas e agregação
+**Next step**: S06 — Auditoria da inferência de sequências longas
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
