@@ -14,13 +14,14 @@
 | AD-008 | Registro canônico de modelos com validação de cabeça e hiperparâmetros não evidenciados explicitamente rotulados como unverified | Normalização unificada para bare state_dict e wrapper model_state_dict, remoção do prefixo _orig_mod. e checagem rígida de dimensão de classes (fc.weight) impedem misturas de ranks; lacunas históricas permanecem unverified conforme AGENTS.md. | active | 2026-10-21 |
 | AD-009 | Protocolo de ruído com taxa efetiva $3\epsilon/4$, faixas contínuas de F1 e métricas vetorizadas | O ressorteio uniforme entre A/C/G/T produz taxa efetiva $3\epsilon/4$; faixas de F1 cobrem o intervalo [0, 1] continuamente conservando o número de classes; cálculo exato de F1 vetorizado via bincount dispensa dependências externas pesadas e preserva correspondência com o paper. | active | 2026-10-21 |
 | AD-010 | Auditoria do Long Voter: desincorporação de generalização para genomas não vistos e causas da queda de ConvNeXt | As sequências longas do NCBI coincidem com as referências da base Kraken2 (mesmo genoma de origem), de modo que os 72,69% da ResNet50 medem acurácia em sequências de genomas já vistos e não generalização; a queda de ConvNeXt decorre de viés na simulação de leituras (super-representação de vírus gigantes com 500 reads vs 50), logit pulling na média pré-softmax e perda de calibração em ConvNeXt_T; contigs <512 bp passam a ser tratados explicitamente via modo padronizado robusto (handle_short='pad') ou histórico (handle_short='skip'). | active | 2026-10-21 |
+| AD-011 | Protocolo unificado de baselines Kraken2 e BLASTN com denominador estrito e estratificação de overlap/genoma | O cálculo rigoroso de acurácia Top-1/Top-5 mantém o total de consultas $N$ no denominador e trata abstenções (unclassified ou sem hit) como rótulo -1 (erro), computando cobertura e acurácia condicional separadamente; estratifica consultas curtas por overlap exato de treino (all, overlap, no_exact_overlap com ~95,89% de sobreposição no split de fragmentos) e consultas longas por presença do genoma de origem (seen_genome vs unseen_genome) e faixas de comprimento; comparações diretas exigem os mesmos identificadores de consulta e cluster bootstrap reamostrando espécies com reposição (2.000 repetições, semente 42) para IC de 95% das diferenças pareadas. | active | 2026-10-21 |
 
 ## Handoff
 
-**Feature**: s06-long-sequence-inference-audit
-**Where**: C1-C13 implemented and tested
+**Feature**: s07-baselines-kraken2-blastn
+**Where**: C1-C22 implemented and verified across short and long reads
 **In progress**: none
-**Next step**: S07 — Baselines Kraken2 e BLASTN no mesmo protocolo
+**Next step**: S08 — Reavaliação do espaço latente
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
