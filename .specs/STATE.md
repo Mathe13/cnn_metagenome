@@ -17,13 +17,14 @@
 | AD-011 | Protocolo unificado de baselines Kraken2 e BLASTN com denominador estrito e estratificação de overlap/genoma | O cálculo rigoroso de acurácia Top-1/Top-5 mantém o total de consultas $N$ no denominador e trata abstenções (unclassified ou sem hit) como rótulo -1 (erro), computando cobertura e acurácia condicional separadamente; estratifica consultas curtas por overlap exato de treino (all, overlap, no_exact_overlap com ~95,89% de sobreposição no split de fragmentos) e consultas longas por presença do genoma de origem (seen_genome vs unseen_genome) e faixas de comprimento; comparações diretas exigem os mesmos identificadores de consulta e cluster bootstrap reamostrando espécies com reposição (2.000 repetições, semente 42) para IC de 95% das diferenças pareadas. | active | 2026-10-21 |
 | AD-012 | Reavaliação rigorosa do espaço latente pré-classificador, desvinculação de UMAP e auditoria de sonda linear independente do teste | Embeddings extraídos imediatamente antes de self.fc sem redução de dimensionalidade; UMAP é estritamente qualitativo 2D; KNN (k=5, cosseno, L2-norm) usa split 80/20 disjunto para evitar auto-vizinhança; Silhouette Score amostral registra taxa de classes válidas (<2 amostras excluídas) e contrasta amostragem aleatória vs estratificada; hierarquia taxonômica mantém conjuntos válidos independentes entre KNN e Silhouette; e a investigação de 'gargalo' no ConvNeXt exige treino de sonda linear estritamente em treino/validação, pois KNN em teste não constitui prova de gargalo na cabeça. | active | 2026-10-21 |
 | AD-013 | Formalização probabilística de calibração (ECE, Brier, NLL), isolamento de label smoothing e moderação de sobreconfiança sob ruído | Confiança Top-1 e entropia não medem calibração; ECE (M=15 bins uniformes), MCE, NLL e Brier score multiclasse via expansão quadrática de memória constante computam calibração real; boa calibração decorre em grande parte de label_smoothing=0.1 e regularização por dropout e não exclusivamente de arquitetura; e sob ruído crescente os modelos entram em regime severo de sobreconfiança (inércia da confiança média frente à queda de acurácia), exigindo moderação textual no manuscrito e ajuste de calibração pós-hoc (temperatura) exclusivamente na validação. | active | 2026-10-21 |
+| AD-014 | Controle composicional pareado por GC/complexidade para 7-mers e auditoria de coocorrência simétrica e RSCU exploratório | Homopolímeros e 7-mers extremos de GC (CCCCCCC, GGGGGGG) dominam os filtros de 1ª camada; controle pareado aleatório uniforme infla a queda específica devido ao GC médio do genoma; controle pareado por GC (|ΔGC|=0) reduz o sinal de homopolímeros a ~0, comprovando que atuam como detectores de composição de bases e não motivos de sequência específicos; coocorrência de Jaccard é não-direcionada e exige correlação intraclasse/pares bidirecionais e modelo nulo de permutação de nós; e contagem de tripletos em frame 0 sem anotação de CDS é normalização exploratória (ExploratoryTripletComposition), exigindo moderação no manuscrito e realocação de sinergia de códons para suplemento. | active | 2026-10-22 |
 
 ## Handoff
 
-**Feature**: s09-calibration-and-confidence-by-noise
-**Where**: C1-C22 implemented and verified; verification report approved (22/22 checks passed)
-**In progress**: none
-**Next step**: S10 — Motivos, controle composicional e tripletos
+**Feature**: s10-motifs-composition-and-triplets
+**Where**: C1-C25 implemented and passing test suite (25/25 checks green)
+**In progress**: verification dispatch
+**Next step**: S11 — Regeneração de tabelas/figuras e revisão final do manuscrito
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
