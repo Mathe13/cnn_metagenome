@@ -1,0 +1,5 @@
+model,n_sequences,mean_length_bp,window_bp,stride_bp,handle_short,accuracy
+ResNet50 (Clean),4360,25400,512,256,pad,72.69
+ConvNeXt_Z (Zero),4360,25400,512,256,pad,12.01
+ConvNeXt_T (Transfer),4360,25400,512,256,pad,3.49
+ConvNeXt_F (Noise),4360,25400,512,256,pad,20.38

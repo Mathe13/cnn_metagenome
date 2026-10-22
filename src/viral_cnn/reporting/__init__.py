@@ -27,3 +27,4 @@ __all__ = [
     "generate_all_figures",
     "verify_latex_figure_paths",
 ]
+

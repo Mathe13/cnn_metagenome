@@ -176,3 +176,4 @@ def verify_latex_figure_paths(tex_path: Path, assets_dir: Path) -> tuple[list[di
                 mismatches.append({"ref": rel_path_str, "status": "missing"})
 
     return matches, mismatches
+

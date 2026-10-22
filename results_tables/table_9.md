@@ -1,0 +1,7 @@
+| model | spearman_rho | p_value | p_fdr_bh |
+| --- | --- | --- | --- |
+| ResNet50 (Clean) | 0.18 | 0.15 | 0.35 |
+| ResNet50 (Noise) | 0.14 | 0.26 | 0.42 |
+| ConvNeXt_Z | 0.11 | 0.38 | 0.48 |
+| ConvNeXt_T | 0.15 | 0.23 | 0.42 |
+| ConvNeXt_F | 0.12 | 0.34 | 0.48 |

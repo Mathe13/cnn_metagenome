@@ -1,0 +1,3 @@
+model,level,mean_entropy_nats,max_entropy_nats,normalized_entropy
+ResNet50,Species,0.42,9.52,0.044
+ConvNeXt,Species,0.78,9.52,0.082

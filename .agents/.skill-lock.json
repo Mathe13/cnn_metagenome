@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "skills": {
+    "tlc-spec-lean": {
+      "name": "tlc-spec-lean",
+      "source": "local",
+      "contentHash": "807aad338cc9e306f68fe9335bc5251a5e749e0bc3676998801e48bf2ff79a80",
+      "installedAt": "2026-10-21T02:48:41.614Z",
+      "updatedAt": "2026-10-21T02:48:41.614Z",
+      "agents": [
+        "antigravity"
+      ],
+      "method": "copy",
+      "global": false
+    }
+  }
+}

@@ -18,13 +18,14 @@
 | AD-012 | Reavaliação rigorosa do espaço latente pré-classificador, desvinculação de UMAP e auditoria de sonda linear independente do teste | Embeddings extraídos imediatamente antes de self.fc sem redução de dimensionalidade; UMAP é estritamente qualitativo 2D; KNN (k=5, cosseno, L2-norm) usa split 80/20 disjunto para evitar auto-vizinhança; Silhouette Score amostral registra taxa de classes válidas (<2 amostras excluídas) e contrasta amostragem aleatória vs estratificada; hierarquia taxonômica mantém conjuntos válidos independentes entre KNN e Silhouette; e a investigação de 'gargalo' no ConvNeXt exige treino de sonda linear estritamente em treino/validação, pois KNN em teste não constitui prova de gargalo na cabeça. | active | 2026-10-21 |
 | AD-013 | Formalização probabilística de calibração (ECE, Brier, NLL), isolamento de label smoothing e moderação de sobreconfiança sob ruído | Confiança Top-1 e entropia não medem calibração; ECE (M=15 bins uniformes), MCE, NLL e Brier score multiclasse via expansão quadrática de memória constante computam calibração real; boa calibração decorre em grande parte de label_smoothing=0.1 e regularização por dropout e não exclusivamente de arquitetura; e sob ruído crescente os modelos entram em regime severo de sobreconfiança (inércia da confiança média frente à queda de acurácia), exigindo moderação textual no manuscrito e ajuste de calibração pós-hoc (temperatura) exclusivamente na validação. | active | 2026-10-21 |
 | AD-014 | Controle composicional pareado por GC/complexidade para 7-mers e auditoria de coocorrência simétrica e RSCU exploratório | Homopolímeros e 7-mers extremos de GC (CCCCCCC, GGGGGGG) dominam os filtros de 1ª camada; controle pareado aleatório uniforme infla a queda específica devido ao GC médio do genoma; controle pareado por GC (|ΔGC|=0) reduz o sinal de homopolímeros a ~0, comprovando que atuam como detectores de composição de bases e não motivos de sequência específicos; coocorrência de Jaccard é não-direcionada e exige correlação intraclasse/pares bidirecionais e modelo nulo de permutação de nós; e contagem de tripletos em frame 0 sem anotação de CDS é normalização exploratória (ExploratoryTripletComposition), exigindo moderação no manuscrito e realocação de sinergia de códons para suplemento. | active | 2026-10-22 |
+| AD-015 | Pipeline unificado de regeneração de tabelas/figuras e trilho duplo de manuscrito (revisão com 56 notas vs submissão limpa) | Garante rastreabilidade exata de cada número (Tabelas 1-12) e figura (Figs 1-5); resolve 5 empates a eps=0.10, denominadores N=1.706.270 e precisão decimal; corrige o painel (e) do ConvNeXt na Fig. 3 e nomes case-sensitive no Linux; e provê versão de submissão BMC limpa com título moderado, abstract estruturado e posicionamento frente a GeNet, preservando versão revisável com macros para os coautores. | active | 2026-10-22 |
 
 ## Handoff
 
-**Feature**: s10-motifs-composition-and-triplets
-**Where**: C1-C25 implemented and verified; verification report approved (25/25 checks passed)
+**Feature**: s11-regeneration-and-manuscript-review
+**Where**: C1-C20 implemented, all 181 tests green, independent verification approved (20/20 checks passed)
 **In progress**: none
-**Next step**: S11 — Regeneração de tabelas/figuras e revisão final do manuscrito
+**Next step**: S12 — Experimento controlado entre arquiteturas (extensão) ou submissão editorial final
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main

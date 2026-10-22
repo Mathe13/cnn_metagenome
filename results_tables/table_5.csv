@@ -1,0 +1,7 @@
+model,level,silhouette,knn_5_acc,valid_classes
+ResNet50 (Clean),Species,-0.042,82.15,13683
+ResNet50 (Clean),Genus,0.015,88.4,2702
+ResNet50 (Clean),Order,0.085,93.1,185
+ConvNeXt (Clean),Species,-0.038,85.3,13683
+ConvNeXt (Clean),Genus,0.022,90.15,2702
+ConvNeXt (Clean),Order,0.098,94.85,185
