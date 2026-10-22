@@ -11,6 +11,11 @@ import unittest
 import numpy as np
 import torch
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from viral_cnn.eval.calibration import (
     CalibrationMetrics,
     ReliabilityDiagramBin,
@@ -20,8 +25,6 @@ from viral_cnn.eval.calibration import (
     TemperatureScaler,
     audit_model_calibration_by_noise,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestCalibration(unittest.TestCase):
