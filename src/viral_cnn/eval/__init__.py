@@ -15,6 +15,16 @@ from .runner import (
     evaluate_model,
     save_evaluation_artifacts,
 )
+from .latent import (
+    extract_latent_embeddings,
+    evaluate_cosine_knn,
+    evaluate_genome_disjoint_knn,
+    evaluate_silhouette_with_audit,
+    calculate_taxonomic_correlations,
+    LinearProbeClassifier,
+    audit_classifier_bottleneck,
+    export_umap_projection,
+)
 
 __all__ = [
     "inject_noise",
@@ -27,4 +37,12 @@ __all__ = [
     "EvaluationResult",
     "evaluate_model",
     "save_evaluation_artifacts",
+    "extract_latent_embeddings",
+    "evaluate_cosine_knn",
+    "evaluate_genome_disjoint_knn",
+    "evaluate_silhouette_with_audit",
+    "calculate_taxonomic_correlations",
+    "LinearProbeClassifier",
+    "audit_classifier_bottleneck",
+    "export_umap_projection",
 ]

@@ -15,13 +15,14 @@
 | AD-009 | Protocolo de ruído com taxa efetiva $3\epsilon/4$, faixas contínuas de F1 e métricas vetorizadas | O ressorteio uniforme entre A/C/G/T produz taxa efetiva $3\epsilon/4$; faixas de F1 cobrem o intervalo [0, 1] continuamente conservando o número de classes; cálculo exato de F1 vetorizado via bincount dispensa dependências externas pesadas e preserva correspondência com o paper. | active | 2026-10-21 |
 | AD-010 | Auditoria do Long Voter: desincorporação de generalização para genomas não vistos e causas da queda de ConvNeXt | As sequências longas do NCBI coincidem com as referências da base Kraken2 (mesmo genoma de origem), de modo que os 72,69% da ResNet50 medem acurácia em sequências de genomas já vistos e não generalização; a queda de ConvNeXt decorre de viés na simulação de leituras (super-representação de vírus gigantes com 500 reads vs 50), logit pulling na média pré-softmax e perda de calibração em ConvNeXt_T; contigs <512 bp passam a ser tratados explicitamente via modo padronizado robusto (handle_short='pad') ou histórico (handle_short='skip'). | active | 2026-10-21 |
 | AD-011 | Protocolo unificado de baselines Kraken2 e BLASTN com denominador estrito e estratificação de overlap/genoma | O cálculo rigoroso de acurácia Top-1/Top-5 mantém o total de consultas $N$ no denominador e trata abstenções (unclassified ou sem hit) como rótulo -1 (erro), computando cobertura e acurácia condicional separadamente; estratifica consultas curtas por overlap exato de treino (all, overlap, no_exact_overlap com ~95,89% de sobreposição no split de fragmentos) e consultas longas por presença do genoma de origem (seen_genome vs unseen_genome) e faixas de comprimento; comparações diretas exigem os mesmos identificadores de consulta e cluster bootstrap reamostrando espécies com reposição (2.000 repetições, semente 42) para IC de 95% das diferenças pareadas. | active | 2026-10-21 |
+| AD-012 | Reavaliação rigorosa do espaço latente pré-classificador, desvinculação de UMAP e auditoria de sonda linear independente do teste | Embeddings extraídos imediatamente antes de self.fc sem redução de dimensionalidade; UMAP é estritamente qualitativo 2D; KNN (k=5, cosseno, L2-norm) usa split 80/20 disjunto para evitar auto-vizinhança; Silhouette Score amostral registra taxa de classes válidas (<2 amostras excluídas) e contrasta amostragem aleatória vs estratificada; hierarquia taxonômica mantém conjuntos válidos independentes entre KNN e Silhouette; e a investigação de 'gargalo' no ConvNeXt exige treino de sonda linear estritamente em treino/validação, pois KNN em teste não constitui prova de gargalo na cabeça. | active | 2026-10-21 |
 
 ## Handoff
 
-**Feature**: s07-baselines-kraken2-blastn
-**Where**: C1-C22 implemented and verified across short and long reads
+**Feature**: s08-latent-space-evaluation
+**Where**: plan.md validated cleanly (0 errors, 0 warnings); awaiting human confirmation before checks.md
 **In progress**: none
-**Next step**: S08 — Reavaliação do espaço latente
+**Next step**: User review of plan.md, then write checks and build
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
