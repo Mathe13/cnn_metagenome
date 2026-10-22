@@ -119,3 +119,4 @@ This steep drop demonstrates that high KNN accuracy under random fragment splitt
 1. **No Phylogenetic Inference**: High taxonomic correlation ($r \approx 0.88$) measures geometric consistency across hierarchy levels in the model's feature space. It must **not** be presented as phylogenetic distance, evolutionary reconstruction, or evidence of biological tree topologies.
 2. **UMAP Disclaimer**: All 2D UMAP figures (Figure 2) must include explicit disclaimers: *"UMAP projections are qualitative 2D exploratory visualizations. Geometric distances, cluster densities, and point proximities in UMAP space do not reflect quantitative cluster cohesion, phylogenetic distance, or taxonomic accuracy."*
 3. **Artifact Provenance**: Reproduction scripts and manifests are generated via `scripts/run_latent_evaluation.py` and stored in `results_latent/`.
+

@@ -225,3 +225,4 @@ def main(cli_args: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

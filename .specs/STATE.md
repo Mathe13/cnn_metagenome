@@ -20,9 +20,9 @@
 ## Handoff
 
 **Feature**: s08-latent-space-evaluation
-**Where**: plan.md validated cleanly (0 errors, 0 warnings); awaiting human confirmation before checks.md
+**Where**: C1-C28 implemented and verified; verification report approved (28/28 checks passed)
 **In progress**: none
-**Next step**: User review of plan.md, then write checks and build
+**Next step**: S09 — Calibração e confiança por nível de ruído
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
