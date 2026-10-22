@@ -1,0 +1,136 @@
+# Model Registry Manifest for 1D CNN Viral Metagenome Models
+# Central declarative configuration for all published model variants.
+# No personal or absolute file paths; paths are relative to repository/remote storage root.
+
+models:
+  resnet_clean_species:
+    architecture: "resnet50_1d"
+    rank: "species"
+    num_classes: 13683
+    checkpoint_rel_path: "cnn_kraken_species/checkpoints/best_resnet_classifier__fast_phase4.pt"
+    dropout_rate: 0.5
+    selection_criterion: "best_validation_phase4_restart"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters:
+      early_stopping_patience: "unverified - intermediate training logs missing"
+
+  resnet_noise_species:
+    architecture: "resnet50_1d"
+    rank: "species"
+    num_classes: 13683
+    checkpoint_rel_path: "cnn_kraken/checkpoint_finetune_resnet/finetune_noise_14.pt"
+    dropout_rate: 0.5
+    selection_criterion: "final_training_epoch_14"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      noise_rate: 0.05
+      max_lr: 5.0e-5
+      weight_decay: 1.0e-4
+      epochs: 15
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters: {}
+
+  convnext_zero_species:
+    architecture: "convnext_tiny_1d"
+    rank: "species"
+    num_classes: 13683
+    checkpoint_rel_path: "cnn_kraken/checkpoint_species_conv_zero/best_convnext_phase3_restarts_v2.pt"
+    dropout_rate: 0.7
+    selection_criterion: "best_validation_phase3_restart"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters:
+      weight_initialization_seed: "unverified - phase 1 init seed missing"
+
+  convnext_transfer_species:
+    architecture: "convnext_tiny_1d"
+    rank: "species"
+    num_classes: 13683
+    checkpoint_rel_path: "cnn_kraken/checkpoint_transfer_species_conv/best_convnext_classifier_fast_phase4_2_restarts.pt"
+    dropout_rate: 0.7
+    selection_criterion: "best_validation_phase4_restart"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters:
+      intermediate_loss_thresholds: "unverified - phase transfer logs missing"
+
+  convnext_noise_species:
+    architecture: "convnext_tiny_1d"
+    rank: "species"
+    num_classes: 13683
+    checkpoint_rel_path: "cnn_kraken/checkpoint_transfer_species_conv/finetune_noise_7.pt"
+    dropout_rate: 0.7
+    selection_criterion: "best_validation_epoch_7"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      noise_rate: 0.05
+      max_lr: 5.0e-5
+      weight_decay: 1.0e-4
+      epochs: 15
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters: {}
+
+  resnet_genus:
+    architecture: "resnet50_1d"
+    rank: "genus"
+    num_classes: 2702
+    checkpoint_rel_path: "cnn_kraken_genus/best_resnet_classifier__fast_phase4.pt"
+    dropout_rate: 0.5
+    selection_criterion: "best_validation_phase4_restart"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters:
+      early_stopping_patience: "unverified - phase logs missing"
+
+  convnext_genus:
+    architecture: "convnext_tiny_1d"
+    rank: "genus"
+    num_classes: 2702
+    checkpoint_rel_path: "cnn_kraken/checkpoint_genus_conv/best_convnext_classifier_fast_phase4_2.pt"
+    dropout_rate: 0.7
+    selection_criterion: "best_validation_phase4_restart"
+    status: "verified"
+    verified_hyperparameters:
+      optimizer: "AdamW"
+      scheduler: "CosineAnnealingLR"
+      label_smoothing: 0.1
+      amp: true
+      max_sequence_length: 512
+      channels: ["A", "C", "G", "T"]
+    unverified_hyperparameters:
+      early_stopping_patience: "unverified - phase logs missing"

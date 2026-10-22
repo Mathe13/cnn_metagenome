@@ -20,6 +20,11 @@ import torch
 try:
     from viral_cnn.data.encoding import NUCLEOTIDES, NUM_FEATURES
     from viral_cnn.models.builder import build_model, MODEL_REGISTRY
+    from viral_cnn.models.registry import (
+        list_model_variants,
+        get_model_spec,
+        load_model_checkpoint,
+    )
     from viral_cnn.inference.engine import predict_sequence
 except ImportError as e:
     sys.stderr.write(f"ImportError: Failed to import viral_cnn modules: {e}\n")
@@ -47,16 +52,22 @@ def main():
     group.add_argument("--fasta", type=str, help="Path to input FASTA file")
 
     parser.add_argument(
+        "--model-variant",
+        type=str,
+        default=None,
+        help=f"Registered model variant name. Supported: {list_model_variants()}",
+    )
+    parser.add_argument(
         "--model-type",
         type=str,
-        default="resnet50_1d",
+        default=None,
         help=f"Model architecture type. Supported: {list(MODEL_REGISTRY.keys())}",
     )
     parser.add_argument(
         "--num-classes",
         type=int,
-        default=13683,
-        help="Number of output taxonomic classes (default: 13683 for Species).",
+        default=None,
+        help="Number of output taxonomic classes (default: 13683 for Species, 2702 for Genus).",
     )
     parser.add_argument(
         "--device",
@@ -79,10 +90,25 @@ def main():
 
     args = parser.parse_args()
 
+    # Resolve variant or defaults
+    if args.model_variant is not None:
+        try:
+            spec = get_model_spec(args.model_variant)
+        except ValueError as e:
+            sys.stderr.write(f"Error: {e}\n")
+            sys.exit(2)
+        model_type = args.model_type if args.model_type is not None else spec.architecture
+        num_classes = args.num_classes if args.num_classes is not None else spec.num_classes
+        default_ckpt = spec.checkpoint_rel_path
+    else:
+        model_type = args.model_type if args.model_type is not None else "resnet50_1d"
+        num_classes = args.num_classes if args.num_classes is not None else 13683
+        default_ckpt = None
+
     # Model type validation
-    if args.model_type.lower().strip() not in MODEL_REGISTRY:
+    if model_type.lower().strip() not in MODEL_REGISTRY:
         sys.stderr.write(
-            f"Error: Unknown model-type '{args.model_type}'. Supported: {list(MODEL_REGISTRY.keys())}\n"
+            f"Error: Unknown model-type '{model_type}'. Supported: {list(MODEL_REGISTRY.keys())}\n"
         )
         sys.exit(2)
 
@@ -115,29 +141,35 @@ def main():
     # Deterministic model initialization
     torch.manual_seed(args.seed)
     model = build_model(
-        model_type=args.model_type,
-        num_classes=args.num_classes,
+        model_type=model_type,
+        num_classes=num_classes,
         max_seq_len=512,
         dropout_rate=0.0,
     )
 
-    if args.checkpoint:
-        ckpt_path = Path(args.checkpoint)
+    checkpoint_to_load = args.checkpoint
+    if checkpoint_to_load is None and default_ckpt is not None:
+        # Check if default relative checkpoint exists locally or under DATA_ROOT
+        data_root = os.environ.get("DATA_ROOT", ".")
+        candidate = Path(data_root) / default_ckpt
+        if candidate.exists():
+            checkpoint_to_load = str(candidate)
+
+    if checkpoint_to_load is not None:
+        ckpt_path = Path(checkpoint_to_load)
         if not ckpt_path.exists():
             sys.stderr.write(f"Error: Checkpoint file not found: {ckpt_path}\n")
             sys.exit(2)
-        checkpoint = torch.load(ckpt_path, map_location=device_str)
-        state_dict = (
-            checkpoint["model_state_dict"]
-            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint
-            else checkpoint
-        )
-        # Clean potential _orig_mod prefix
-        clean_state_dict = {
-            (k[len("_orig_mod.") :] if k.startswith("_orig_mod.") else k): v
-            for k, v in state_dict.items()
-        }
-        model.load_state_dict(clean_state_dict)
+        try:
+            load_model_checkpoint(
+                model=model,
+                checkpoint=ckpt_path,
+                expected_classes=num_classes,
+                map_location=device_str,
+            )
+        except Exception as e:
+            sys.stderr.write(f"Error: Failed to load checkpoint: {e}\n")
+            sys.exit(2)
 
     result = predict_sequence(
         model=model,
@@ -148,20 +180,24 @@ def main():
     )
 
     output = {
-        "model_type": args.model_type,
-        "num_classes": args.num_classes,
-        "input_length": result.input_length,
+        "status": "success",
+        "model_type": model_type,
+        "num_classes": num_classes,
         "channels": result.channels,
         "predicted_class_index": result.predicted_class_index,
+        "predicted_csv_id": result.predicted_class_index + 1,
         "confidence": round(result.confidence, 6),
         "top5_class_indices": result.top5_class_indices,
+        "top5_classes": result.top5_class_indices,
+        "top5_csv_ids": [idx + 1 for idx in result.top5_class_indices],
         "top5_confidences": [round(c, 6) for c in result.top5_confidences],
+        "input_length": result.input_length,
+        "device": device_str,
     }
 
     print(json.dumps(output, indent=2))
-    sys.exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())
