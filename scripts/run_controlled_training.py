@@ -7,9 +7,13 @@ Supports dry-run validation, parameter parity checks, and multi-seed benchmarkin
 import argparse
 import json
 from pathlib import Path
+import os
 import sys
 import time
 from typing import Any
+
+# Ensure project src is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 import torch
 import torch.nn as nn
