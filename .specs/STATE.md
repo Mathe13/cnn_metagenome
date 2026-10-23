@@ -23,10 +23,10 @@
 
 ## Handoff
 
-**Feature**: s12-controlled-architecture-experiment
-**Where**: C1-C17 implemented, all 198 tests green, reports and CLI verified
+**Feature**: n01-remote-jupyterhub-parquet-bridge
+**Where**: C1-C19 implemented, all 19 tests green, independently verified (PASS)
 **In progress**: none
-**Next step**: verificação independente pelo subagente Verifier (tlc-spec-lean)
+**Next step**: N02 — Notebooks de Avaliação Limpa, Corrupção por Ruído, Entropia Hierárquica e Calibração (n02-short-benchmark-and-calibration-notebooks)
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
