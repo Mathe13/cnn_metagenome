@@ -9,6 +9,9 @@ dist/
 build/
 .ipynb_checkpoints/
 dataset_kraken/*_seqs.csv
+results_reproduction/
+cnn_kraken/
+processed_ncbi_splited_parquet/
 *.aux
 *.log
 *.out

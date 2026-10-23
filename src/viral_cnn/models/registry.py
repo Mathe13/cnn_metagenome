@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import yaml
 
+from viral_cnn.utils.logging_utils import log_artifact_path
 from .builder import build_model
 
 
@@ -242,8 +243,10 @@ def load_model_checkpoint(
         ckpt_path = Path(checkpoint)
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint file not found: {ckpt_path}")
+        log_artifact_path("checkpoint", ckpt_path)
         raw_checkpoint = torch.load(ckpt_path, map_location=map_location)
     elif isinstance(checkpoint, dict):
+        log_artifact_path("checkpoint", "in-memory dict")
         raw_checkpoint = checkpoint
     else:
         raise TypeError(
@@ -306,6 +309,8 @@ def build_registered_model(
             expected_classes=spec.num_classes,
             map_location=device,
         )
+    else:
+        log_artifact_path("model", f"{variant_name} (uninitialized random weights, no checkpoint)")
 
     model.to(device)
     return model

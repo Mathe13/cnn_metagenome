@@ -23,6 +23,7 @@ import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
 from viral_cnn.data.encoding import NUCLEOTIDES, NUCLEOTIDE_MAPPING, NUM_FEATURES
+from viral_cnn.utils.logging_utils import log_artifact_path
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,11 @@ class ParquetBatchIterableDataset(IterableDataset):
 
         # Fast CPU metadata read
         self.total_samples = self._calculate_total_samples_fast()
+        log_artifact_path(
+            "DataLoader/ParquetDataset",
+            self.file_paths,
+            extra=f"{len(self.file_paths)} partitions, {self.total_samples} samples, batch_size={self.batch_size}",
+        )
 
     def _calculate_total_samples_fast(self) -> int:
         """Reads only Parquet metadata footers across file partitions."""

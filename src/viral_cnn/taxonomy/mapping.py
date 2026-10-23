@@ -13,6 +13,8 @@ import csv
 import os
 from pathlib import Path
 
+from viral_cnn.utils.logging_utils import log_artifact_path
+
 
 def taxonomic_id_to_model_label(taxonomic_id: int) -> int:
     """Converts a 1-based CSV taxonomic ID into a 0-based model class index."""
@@ -38,6 +40,8 @@ def load_taxonomy_mapping(
     csv_file = Path(csv_path)
     if not csv_file.exists():
         raise FileNotFoundError(f"Taxonomy CSV not found: {csv_file}")
+
+    log_artifact_path("taxonomy mapping", csv_file, extra=f"rank: {rank_column}")
 
     mapping: dict[int, str] = {}
     with open(csv_file, mode="r", encoding="utf-8") as f:

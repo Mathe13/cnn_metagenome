@@ -70,6 +70,7 @@ Não mova nem renomeie notebooks, checkpoints, tabelas de rótulos ou diretório
               sys.path.insert(0, str(r / "src"))
           break
   ```
+- **Rastreabilidade e log de caminhos de artefatos (`LOG_PATH`):** Toda vez que dataloaders, datasets (ex: Parquet, CSV), modelos ou checkpoints forem instanciados ou carregados, o caminho absoluto ou relativo de origem deve ser registrado explicitamente no console e no log (ex: `[LOG_PATH] Loading ... from: <path>`). Esse comportamento é ativado por padrão (`LOG_PATH=true` ou não definida) e pode ser desativado definindo a variável de ambiente `LOG_PATH=0` ou `LOG_PATH=false`.
 - Preserve o tratamento correto de `IterableDataset`, a distribuição disjunta de arquivos entre workers e o comportamento de CPU/GPU. Testes rápidos devem usar dados sintéticos e não iniciar treinamento completo ou baixar bases automaticamente.
 - Acrescente testes apenas para contratos com impacto científico: ordem A/C/G/T e padding; integridade e disjunção dos splits; mapeamento taxonômico e ordem de logits; taxa efetiva esperada de ruído; agregação de janelas; ausência de auto-vizinho no KNN; controle pareado de motivos. Testes não substituem validação com artefatos reais.
 - Não mude arquitetura, pesos, pré-processamento, split, definição de métrica ou composição do conjunto e mantenha o mesmo nome do experimento. Uma mudança metodológica precisa de novo identificador, comparação explícita e atualização da documentação.
