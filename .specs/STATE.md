@@ -24,9 +24,9 @@
 ## Handoff
 
 **Feature**: n02-short-benchmark-and-calibration-notebooks
-**Where**: plan.md authored and validated (`validate_plan.py` 0 errors, 0 warnings); awaiting confirmation to proceed to checks.md + build + verify
-**In progress**: Plan review
-**Next step**: Derive `checks.md`, run `validate_checks.py`, implement S1-S4, and dispatch independent Verifier
+**Where**: verification.md completed and validated (`validate_verification.py` 0 errors, 0 warnings); feature fully verified and closed
+**In progress**: none (N02 complete)
+**Next step**: Proceed to N03 (`n03-short-finetune-training-notebooks`) in `ROADMAP_REPRODUCAO_NOTEBOOKS.md`
 **Blockers**: none
-**Uncommitted**: `.specs/features/n02-short-benchmark-and-calibration-notebooks/plan.md`
+**Uncommitted**: none
 **Branch**: main
