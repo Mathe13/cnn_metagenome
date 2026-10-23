@@ -58,6 +58,18 @@ Não mova nem renomeie notebooks, checkpoints, tabelas de rótulos ou diretório
 - Use Python e as bibliotecas já empregadas pelo repositório. Registre versões de Python, PyTorch, CUDA, Dask/cuDF, pandas/pyarrow e demais dependências relevantes; não invente versões a partir de mensagens de notebook.
 - Transforme células reutilizáveis em funções com entradas explícitas, sem depender de estado invisível, ordem de execução ou `import *`. Os notebooks podem continuar como interface de análise.
 - Use configurações legíveis e salve-as com cada execução. Defina sementes para Python, NumPy, PyTorch, particionamento e perturbações; registre limites de determinismo em GPU.
+- **Resolução de imports em Notebooks de Reprodução (`notebooks/reproduction/`):** Toda célula inicial de notebook novo deve conter a resolução autônoma do caminho da raiz do repositório adicionando `src` a `sys.path` antes de importar `viral_cnn`, permitindo execução transparente tanto no ambiente de desenvolvimento local quanto conectado remotamente a servidores JupyterHub/JupyterLab remotos sem depender de `pip install -e .`:
+  ```python
+  import sys
+  from pathlib import Path
+
+  current_dir = Path.cwd().resolve()
+  for r in [current_dir, current_dir.parent, current_dir.parent.parent, current_dir.parent.parent.parent]:
+      if (r / "src" / "viral_cnn").exists():
+          if str(r / "src") not in sys.path:
+              sys.path.insert(0, str(r / "src"))
+          break
+  ```
 - Preserve o tratamento correto de `IterableDataset`, a distribuição disjunta de arquivos entre workers e o comportamento de CPU/GPU. Testes rápidos devem usar dados sintéticos e não iniciar treinamento completo ou baixar bases automaticamente.
 - Acrescente testes apenas para contratos com impacto científico: ordem A/C/G/T e padding; integridade e disjunção dos splits; mapeamento taxonômico e ordem de logits; taxa efetiva esperada de ruído; agregação de janelas; ausência de auto-vizinho no KNN; controle pareado de motivos. Testes não substituem validação com artefatos reais.
 - Não mude arquitetura, pesos, pré-processamento, split, definição de métrica ou composição do conjunto e mantenha o mesmo nome do experimento. Uma mudança metodológica precisa de novo identificador, comparação explícita e atualização da documentação.

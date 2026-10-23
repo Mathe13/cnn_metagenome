@@ -1,7 +1,7 @@
 {
   "notebook_id": "01_benchmark_clean_and_noise",
-  "timestamp_utc": "2026-10-23T01:06:48.152407+00:00",
-  "git_commit": "8a6c97d56c35092ae717e8d6991c5e20f901035d",
+  "timestamp_utc": "2026-10-23T01:27:11.975169+00:00",
+  "git_commit": "1fd71d610290b48cdc951b3c424576a0835634a2",
   "seed": 42,
   "data_root": "/home/matheus/Documents/cnn_metagenome",
   "is_smoke_test": true,
