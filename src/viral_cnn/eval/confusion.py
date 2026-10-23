@@ -190,3 +190,122 @@ def get_confused_class_samples(
         })
     return final_output
 
+
+def _decode_to_dna_string(seq: Any) -> str:
+    """Decodes token tensors, integer arrays, or raw strings to canonical DNA characters."""
+    if isinstance(seq, str):
+        return seq.upper()
+    if isinstance(seq, torch.Tensor):
+        seq = seq.detach().cpu().numpy()
+    seq_arr = np.asarray(seq).flatten()
+    token_map = {0: "A", 1: "C", 2: "G", 3: "T"}
+    chars = [token_map.get(int(x), "N") for x in seq_arr if int(x) in token_map]
+    return "".join(chars)
+
+
+def compare_confused_species_identity(
+    seq1: Any,
+    seq2: Any,
+    label1: Optional[str] = None,
+    label2: Optional[str] = None,
+    use_ncbi_online: bool = False,
+    ncbi_email: Optional[str] = None,
+    match_score: int = 1,
+    mismatch_penalty: int = -1,
+    gap_penalty: int = -1,
+) -> Dict[str, Any]:
+    """
+    Computes global pairwise sequence identity and alignment score between representative
+    sequences of confused class pairs without requiring external network calls by default.
+    """
+    if use_ncbi_online:
+        logger.warning(
+            "NCBI online lookup requested but skipped in offline-safe mode; using local sequences."
+        )
+
+    s1 = _decode_to_dna_string(seq1)
+    s2 = _decode_to_dna_string(seq2)
+    n, m = len(s1), len(s2)
+
+    if n == 0 or m == 0:
+        return {
+            "identity": 0.0,
+            "alignment_score": 0,
+            "seq1_len": n,
+            "seq2_len": m,
+            "matches": 0,
+            "aligned_seq1": s1,
+            "aligned_seq2": s2,
+            "label1": label1 or "",
+            "label2": label2 or "",
+        }
+
+    dp = np.zeros((n + 1, m + 1), dtype=np.int32)
+    for i in range(n + 1):
+        dp[i, 0] = i * gap_penalty
+    for j in range(m + 1):
+        dp[0, j] = j * gap_penalty
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            match = match_score if s1[i - 1] == s2[j - 1] else mismatch_penalty
+            dp[i, j] = max(
+                dp[i - 1, j - 1] + match,
+                dp[i - 1, j] + gap_penalty,
+                dp[i, j - 1] + gap_penalty,
+            )
+
+    # Traceback for exact global alignment
+    align1: List[str] = []
+    align2: List[str] = []
+    i, j = n, m
+    matches = 0
+
+    while i > 0 and j > 0:
+        score_current = dp[i, j]
+        score_diag = dp[i - 1, j - 1]
+        score_up = dp[i - 1, j]
+        match = match_score if s1[i - 1] == s2[j - 1] else mismatch_penalty
+
+        if score_current == score_diag + match:
+            align1.append(s1[i - 1])
+            align2.append(s2[j - 1])
+            if s1[i - 1] == s2[j - 1]:
+                matches += 1
+            i -= 1
+            j -= 1
+        elif score_current == score_up + gap_penalty:
+            align1.append(s1[i - 1])
+            align2.append("-")
+            i -= 1
+        else:
+            align1.append("-")
+            align2.append(s2[j - 1])
+            j -= 1
+
+    while i > 0:
+        align1.append(s1[i - 1])
+        align2.append("-")
+        i -= 1
+    while j > 0:
+        align1.append("-")
+        align2.append(s2[j - 1])
+        j -= 1
+
+    aligned_s1 = "".join(reversed(align1))
+    aligned_s2 = "".join(reversed(align2))
+    align_len = len(aligned_s1)
+    identity = round((matches / align_len * 100.0) if align_len > 0 else 0.0, 2)
+
+    return {
+        "identity": identity,
+        "alignment_score": int(dp[n, m]),
+        "seq1_len": n,
+        "seq2_len": m,
+        "matches": matches,
+        "aligned_seq1": aligned_s1,
+        "aligned_seq2": aligned_s2,
+        "label1": label1 or "",
+        "label2": label2 or "",
+    }
+

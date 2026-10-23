@@ -1,0 +1,5 @@
+model,noise,top1_accuracy,top1_confidence,ece,mce,nll,brier_score,n_samples,n_bins,binning_strategy,sum_bin_weights,conf_on_correct,conf_on_incorrect,overconfidence_gap,is_overconfident_regime
+resnet_clean,noise_0.0,0.0,8.4e-05,8.4e-05,8.4e-05,9.542367,0.99993,16,15,equal_width,1.0,0.0,8.4e-05,8.4e-05,False
+resnet_clean,noise_0.05,0.0,8.4e-05,8.4e-05,8.4e-05,9.542335,0.99993,16,15,equal_width,1.0,0.0,8.4e-05,8.4e-05,False
+convnext_zero,noise_0.0,0.0,0.000232,0.000232,0.000232,9.719915,0.999957,16,15,equal_width,1.0,0.0,0.000232,0.000232,False
+convnext_zero,noise_0.05,0.0,0.00026,0.00026,0.00026,9.796067,0.999967,16,15,equal_width,1.0,0.0,0.00026,0.00026,False

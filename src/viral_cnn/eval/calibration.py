@@ -6,6 +6,7 @@ and validation-only temperature scaling.
 
 from dataclasses import dataclass, asdict
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import numpy as np
@@ -496,4 +497,200 @@ def audit_model_calibration_by_noise(
             audit_report["models"][model_name][rate_key] = metrics.to_dict()
 
     return audit_report
+
+
+class TaxonomyEntropyAnalyzer:
+    """
+    Hierarchical predictive entropy and pre-classifier activation entropy analyzer.
+    Migrated from short/full_loss_function.ipynb (cells 37-49) for Table 7 reproduction.
+
+    Measures:
+      - h_species: Shannon entropy of predicted species distribution in nats (bounded by ln(N_species))
+      - h_genus: Shannon entropy of genus distribution aggregated via scatter_add_ in nats
+      - hierarchical_entropy_gap: Delta H = h_species - h_genus >= 0 (up to numerical tolerance)
+      - h_activation: Pre-classifier representation normalized entropy in [0.0, 1.0]
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        species_to_genus_map: Union[torch.Tensor, np.ndarray, List[int]],
+        device: Optional[Union[str, torch.device]] = None,
+    ):
+        self.model = model
+        if device is not None:
+            self.device = torch.device(device) if isinstance(device, str) else device
+        else:
+            try:
+                self.device = next(model.parameters()).device
+            except StopIteration:
+                self.device = torch.device("cpu")
+
+        if isinstance(species_to_genus_map, torch.Tensor):
+            self.species_to_genus_map = species_to_genus_map.to(self.device).long()
+        else:
+            self.species_to_genus_map = torch.tensor(
+                species_to_genus_map, dtype=torch.long, device=self.device
+            )
+
+        if (self.species_to_genus_map < 0).any():
+            raise ValueError(
+                "species_to_genus_map cannot contain negative class indices."
+            )
+
+        self.activations: Dict[str, torch.Tensor] = {}
+        self.hook_handle: Optional[torch.utils.hooks.RemovableHandle] = None
+        self._register_hooks()
+
+    def _register_hooks(self) -> None:
+        target_model = getattr(self.model, "_orig_mod", self.model)
+        if not hasattr(target_model, "fc"):
+            raise AttributeError(
+                "Model does not contain an 'fc' classification layer."
+            )
+
+        def pre_hook_fn(module: torch.nn.Module, inputs: Tuple[torch.Tensor, ...]) -> None:
+            self.activations["pre_classifier"] = inputs[0].detach()
+
+        self.hook_handle = target_model.fc.register_forward_pre_hook(pre_hook_fn)
+
+    def remove_hook(self) -> None:
+        """Removes the forward pre-hook cleanly from target_model.fc."""
+        if self.hook_handle is not None:
+            self.hook_handle.remove()
+            self.hook_handle = None
+
+    def __enter__(self) -> "TaxonomyEntropyAnalyzer":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.remove_hook()
+
+    def calculate_entropy(self, probs: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        """Calculates Shannon entropy in nats along the last dimension."""
+        safe_probs = torch.clamp(probs, min=eps)
+        entropy = -(safe_probs * torch.log(safe_probs)).sum(dim=-1)
+        return entropy
+
+    def calculate_activation_entropy(
+        self,
+        activations: torch.Tensor,
+        eps: float = 1e-12,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        """
+        Calculates energy-normalized entropy of latent representations before fc.
+        When normalize=True, scales by ln(D) to bound values within [0.0, 1.0].
+        """
+        z = activations.flatten(1)
+        energy = torch.abs(z)
+        denom = energy.sum(dim=1, keepdim=True) + eps
+        probs = energy / denom
+
+        safe_probs = torch.clamp(probs, min=eps)
+        entropy = -(safe_probs * torch.log(safe_probs)).sum(dim=1)
+
+        if normalize:
+            d_dim = probs.shape[1]
+            if d_dim > 1:
+                entropy = entropy / math.log(d_dim)
+
+        return entropy
+
+    def get_genus_probs(self, species_probs: torch.Tensor) -> torch.Tensor:
+        """Aggregates species probabilities into genus probabilities via scatter_add_."""
+        num_batch = species_probs.shape[0]
+        num_genus = int(self.species_to_genus_map.max().item() + 1)
+
+        genus_probs = torch.zeros(
+            (num_batch, num_genus),
+            dtype=species_probs.dtype,
+            device=self.device,
+        )
+        mapping = (
+            self.species_to_genus_map.unsqueeze(0).expand(num_batch, -1)
+        )
+        genus_probs.scatter_add_(1, mapping, species_probs)
+        return genus_probs
+
+    def analyze_batch(self, inputs: torch.Tensor) -> Dict[str, np.ndarray]:
+        """
+        Evaluates a single batch and returns entropy metrics in nats as NumPy arrays.
+        """
+        self.model.eval()
+        dev_inputs = inputs.to(self.device)
+        if dev_inputs.dim() == 3 and dev_inputs.shape[0] == 1:
+            dev_inputs = dev_inputs.squeeze(0)
+
+        with torch.inference_mode():
+            logits = self.model(dev_inputs)
+            species_probs = F.softmax(logits, dim=-1)
+            h_species = self.calculate_entropy(species_probs)
+
+            genus_probs = self.get_genus_probs(species_probs)
+            h_genus = self.calculate_entropy(genus_probs)
+
+            latent = self.activations.get("pre_classifier")
+            if latent is None:
+                raise RuntimeError("Pre-classifier activation hook did not fire.")
+
+            h_activation = self.calculate_activation_entropy(latent, normalize=True)
+            gap = h_species - h_genus
+
+            return {
+                "h_species": h_species.cpu().numpy(),
+                "h_genus": h_genus.cpu().numpy(),
+                "h_activation": h_activation.cpu().numpy(),
+                "hierarchical_entropy_gap": gap.cpu().numpy(),
+            }
+
+    def analyze_dataloader(
+        self,
+        dataloader: Any,
+        max_batches: Optional[int] = None,
+    ) -> Dict[str, float]:
+        """
+        Iterates across dataloader and aggregates sample-weighted averages
+        for Table 7 reporting.
+        """
+        all_h_species: List[np.ndarray] = []
+        all_h_genus: List[np.ndarray] = []
+        all_h_act: List[np.ndarray] = []
+        all_gap: List[np.ndarray] = []
+
+        batch_idx = 0
+        for batch in dataloader:
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            if isinstance(batch, (list, tuple)):
+                inputs = batch[0]
+            elif isinstance(batch, dict):
+                inputs = batch.get("inputs") or batch.get("sequences")
+            else:
+                inputs = batch
+
+            metrics = self.analyze_batch(inputs)
+            all_h_species.append(metrics["h_species"])
+            all_h_genus.append(metrics["h_genus"])
+            all_h_act.append(metrics["h_activation"])
+            all_gap.append(metrics["hierarchical_entropy_gap"])
+            batch_idx += 1
+
+        if not all_h_species:
+            raise ValueError("Dataloader produced zero batches.")
+
+        concat_species = np.concatenate(all_h_species)
+        concat_genus = np.concatenate(all_h_genus)
+        concat_act = np.concatenate(all_h_act)
+        concat_gap = np.concatenate(all_gap)
+
+        return {
+            "mean_h_species": round(float(np.mean(concat_species)), 4),
+            "max_h_species": round(float(np.max(concat_species)), 4),
+            "mean_h_genus": round(float(np.mean(concat_genus)), 4),
+            "mean_h_activation": round(float(np.mean(concat_act)), 4),
+            "mean_hierarchical_gap": round(float(np.mean(concat_gap)), 4),
+            "n_samples": int(len(concat_species)),
+        }
 

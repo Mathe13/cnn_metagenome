@@ -203,6 +203,12 @@ def ensure_smoke_test_artifacts(
     labels = [i % 5 for i in range(num_samples_per_split)]
     pd.DataFrame({"sequence_padded": seqs, "label": labels}).to_parquet(short_test_file, index=False)
 
+    genus_dir = root / "cnn_kraken" / "processed_kraken_genus_splited_parquet"
+    genus_dir.mkdir(parents=True, exist_ok=True)
+    genus_test_file = genus_dir / "test.parquet"
+    genus_labels = [i % 3 for i in range(num_samples_per_split)]
+    pd.DataFrame({"sequence_padded": seqs, "label": genus_labels}).to_parquet(genus_test_file, index=False)
+
     # 2. Long partitions (species_id, genus_id, origin_len, read_len, sequence)
     long_test_file = long_dir / "test.parquet"
     long_seqs = ["".join(random.choices(bases, k=1024)) for _ in range(num_samples_per_split)]
@@ -214,17 +220,27 @@ def ensure_smoke_test_artifacts(
         "sequence": long_seqs,
     }).to_parquet(long_test_file, index=False)
 
-    # 3. Taxonomy CSV (1-based ID)
+    # 3. Taxonomy CSVs (1-based ID) - only create synthetic fallback if not present
     tax_file = tax_dir / "species_name_ids.csv"
-    pd.DataFrame({
-        "species": [f"Taxon_{i+1}" for i in range(5)],
-        "id": [i + 1 for i in range(5)],
-    }).to_csv(tax_file, index=False)
+    if not tax_file.exists():
+        pd.DataFrame({
+            "species": [f"Taxon_{i+1}" for i in range(5)],
+            "id": [i + 1 for i in range(5)],
+        }).to_csv(tax_file, index=False)
+
+    genus_tax_file = tax_dir / "genus_name_ids.csv"
+    if not genus_tax_file.exists():
+        pd.DataFrame({
+            "genus": [f"Genus_{i+1}" for i in range(3)],
+            "id": [i + 1 for i in range(3)],
+        }).to_csv(genus_tax_file, index=False)
 
     return {
         "short": {
             "test_parquet": str(short_test_file),
+            "genus_test_parquet": str(genus_test_file),
             "species_csv": str(tax_file),
+            "genus_csv": str(genus_tax_file),
         },
         "long": {
             "test_parquet": str(long_test_file),

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 import random
 from typing import Iterator, List, Optional, Sequence, Tuple
 
@@ -51,7 +52,17 @@ class ParquetBatchIterableDataset(IterableDataset):
         debug: bool = False,
     ):
         super().__init__()
-        self.file_paths = [str(p) for p in file_paths]
+        if isinstance(file_paths, (str, Path)):
+            p = Path(file_paths)
+            if p.is_dir():
+                found = sorted(p.glob("*.parquet"))
+                if not found:
+                    found = sorted(p.rglob("*.parquet"))
+                self.file_paths = [str(f) for f in found]
+            else:
+                self.file_paths = [str(p)]
+        else:
+            self.file_paths = [str(p) for p in file_paths]
         self.padded_column_name = padded_column_name
         self.label_column = label_column
         self.maxlen = maxlen

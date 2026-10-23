@@ -5,8 +5,9 @@ Resource profiling and telemetry for controlled architecture training.
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 import time
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -122,3 +123,75 @@ class ResourceProfiler:
             total_flops=float(total_flops),
             wall_clock_seconds=float(wall_clock),
         )
+
+
+def profile_inference_model(
+    model: nn.Module,
+    input_size: Tuple[int, ...] = (32, 512),
+    device: Union[str, torch.device] = "cpu",
+    num_warmup: int = 5,
+    num_runs: int = 20,
+) -> dict[str, Any]:
+    """
+    Profiles an inference model to measure parameters, memory footprint,
+    latency, throughput, and estimated GFLOPs.
+    Matches the historical benchmark.ipynb profile_model contract.
+    """
+    dev = torch.device(device) if isinstance(device, str) else device
+    model = model.to(dev)
+    model.eval()
+
+    if len(input_size) == 2:
+        x = torch.randint(0, 4, input_size, dtype=torch.long, device=dev)
+    else:
+        x = torch.randn(input_size, dtype=torch.float32, device=dev)
+
+    # 1. Parameter statistics
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # 2. Footprint in MB
+    param_size = sum(p.numel() * p.element_size() for p in model.parameters())
+    buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
+    total_size_mb = (param_size + buffer_size) / (1024.0 ** 2)
+
+    # 3. FLOPs estimation per sample
+    seq_len = input_size[-1]
+    flops_per_sample = float(total_params * (seq_len / 256.0) * 4.0)
+    gflops = round(flops_per_sample / 1.0e9, 4)
+
+    # 4. Warmup passes
+    with torch.no_grad():
+        for _ in range(num_warmup):
+            _ = model(x)
+        if dev.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(dev)
+
+    # 5. Latency benchmarking
+    latencies: list[float] = []
+    with torch.no_grad():
+        for _ in range(num_runs):
+            if dev.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.synchronize(dev)
+            t0 = time.perf_counter()
+            _ = model(x)
+            if dev.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.synchronize(dev)
+            t1 = time.perf_counter()
+            latencies.append((t1 - t0) * 1000.0)
+
+    avg_latency = float(np.mean(latencies)) if latencies else 0.0
+    std_latency = float(np.std(latencies)) if latencies else 0.0
+
+    batch_size = input_size[0]
+    throughput = (batch_size / (avg_latency / 1000.0)) if avg_latency > 0 else 0.0
+
+    return {
+        "total_params": int(total_params),
+        "trainable_params": int(trainable_params),
+        "size_mb": round(float(total_size_mb), 2),
+        "gflops": gflops,
+        "avg_latency_ms": round(avg_latency, 2),
+        "std_latency_ms": round(std_latency, 2),
+        "throughput_seq_sec": round(float(throughput), 1),
+    }

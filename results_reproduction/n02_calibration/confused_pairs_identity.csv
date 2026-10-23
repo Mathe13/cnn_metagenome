@@ -1,0 +1,2 @@
+confusion_score,true_label,pred_label,identity_percent,alignment_score
+0.5,0,1,75.0,256

@@ -1,0 +1,3 @@
+mean_h_species,max_h_species,mean_h_genus,mean_h_activation,mean_hierarchical_gap,n_samples,model_name
+9.5231,9.5231,0.0032,0.9245,9.5199,16,resnet_clean_species
+9.3735,9.3795,0.0024,0.9852,9.3711,16,convnext_zero_species

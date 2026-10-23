@@ -1,0 +1,21 @@
+{
+  "notebook_id": "02_analyze_confidence_and_calibration",
+  "timestamp_utc": "2026-10-23T01:02:11.080681+00:00",
+  "git_commit": "1faab01a964bb1cdf9470ed11753ffa86fa7c7a1",
+  "seed": 42,
+  "data_root": "/home/matheus/Documents/cnn_metagenome",
+  "is_smoke_test": true,
+  "device": "cpu",
+  "library_versions": {
+    "python": "3.10.12",
+    "torch": "2.14.1+cu130",
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "pyarrow": "25.0.1"
+  },
+  "checkpoints": {},
+  "input_files": [],
+  "metrics_summary": {
+    "top_k_confused": 0
+  }
+}

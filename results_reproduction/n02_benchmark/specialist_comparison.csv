@@ -1,0 +1,6 @@
+species_id,species_name,samples,correct_resnet,correct_convnext,accuracy_resnet,accuracy_convnext,f1_resnet,f1_convnext,confidence_resnet,confidence_convnext,winner
+0,Species_0,4,0,0,0.0,0.0,0.0,0.0,0.0001,0.0005,both_zero
+1,Species_1,3,0,0,0.0,0.0,0.0,0.0,0.0001,0.0006,both_zero
+2,Species_2,3,0,0,0.0,0.0,0.0,0.0,0.0001,0.0006,both_zero
+3,Species_3,3,0,0,0.0,0.0,0.0,0.0,0.0001,0.0005,both_zero
+4,Species_4,3,0,0,0.0,0.0,0.0,0.0,0.0001,0.0005,both_zero

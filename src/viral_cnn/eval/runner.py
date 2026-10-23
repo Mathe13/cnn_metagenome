@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 
 from ..data.encoding import encode_sequence_tokens
-from .noise import inject_noise
+from .noise import inject_noise, verify_effective_noise_rate
 from .metrics import (
     ClassificationMetrics,
     compute_classification_metrics,
@@ -237,3 +237,157 @@ def save_evaluation_artifacts(
         "predictions": primary_preds,
         "manifest": str(manifest_file),
     }
+
+
+def evaluate_dataloader(
+    model: torch.nn.Module,
+    dataloader: Any,
+    device: Union[str, torch.device] = "cpu",
+    noise_rate: float = 0.0,
+    noise_rates: Optional[List[float]] = None,
+    seed: int = 42,
+    model_name: str = "custom_model",
+    num_classes: Optional[int] = None,
+    max_batches: Optional[int] = None,
+    verify_noise: bool = True,
+) -> Union[EvaluationResult, Dict[float, EvaluationResult]]:
+    """
+    Evaluates a PyTorch model over a DataLoader (or IterableDataset) of batches (inputs, labels),
+    supporting clean evaluation and controlled noise sweeps.
+    """
+    dev = torch.device(device) if isinstance(device, str) else device
+    model = model.to(dev)
+    model.eval()
+
+    def _eval_for_rate(rate: float) -> EvaluationResult:
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
+
+        all_labels: List[int] = []
+        all_preds: List[int] = []
+        all_top5: List[List[int]] = []
+        all_confs: List[float] = []
+        all_logits_list: List[np.ndarray] = []
+
+        orig_tokens_sample: List[torch.Tensor] = []
+        noisy_tokens_sample: List[torch.Tensor] = []
+
+        batch_idx = 0
+        with torch.no_grad():
+            for batch in dataloader:
+                if max_batches is not None and batch_idx >= max_batches:
+                    break
+
+                if isinstance(batch, (list, tuple)):
+                    inputs, labels = batch[0], batch[1]
+                elif isinstance(batch, dict):
+                    inputs = batch.get("inputs") or batch.get("sequences")
+                    labels = batch.get("labels") or batch.get("label")
+                else:
+                    raise ValueError(f"Unsupported batch type: {type(batch)}")
+
+                # Squeeze outer worker dimensions if present
+                if inputs.dim() == 3 and inputs.shape[0] == 1:
+                    inputs = inputs.squeeze(0)
+                if labels.dim() == 2 and labels.shape[0] == 1:
+                    labels = labels.squeeze(0)
+
+                orig_inputs = inputs.clone()
+
+                if rate > 0.0:
+                    inputs = inject_noise(
+                        sequences=inputs,
+                        noise_rate=rate,
+                        generator=generator,
+                    )
+
+                if verify_noise and rate > 0.0 and len(orig_tokens_sample) < 50:
+                    orig_tokens_sample.append(orig_inputs.cpu())
+                    noisy_tokens_sample.append(inputs.cpu())
+
+                inputs = inputs.to(dev)
+                logits = model(inputs)
+                probs = F.softmax(logits, dim=-1)
+
+                k = min(5, logits.shape[-1])
+                topk_probs, topk_indices = torch.topk(probs, k=k, dim=-1)
+
+                top1_preds = topk_indices[:, 0].cpu().tolist()
+                top1_confs = topk_probs[:, 0].cpu().tolist()
+                top5_indices = topk_indices.cpu().tolist()
+
+                all_labels.extend(labels.cpu().tolist())
+                all_preds.extend(top1_preds)
+                all_top5.extend(top5_indices)
+                all_confs.extend(top1_confs)
+                all_logits_list.append(logits.cpu().numpy())
+
+                batch_idx += 1
+
+        if not all_labels:
+            raise ValueError("Dataloader produced zero samples.")
+
+        empirical_rate = 0.0
+        if verify_noise and rate > 0.0 and orig_tokens_sample:
+            orig_cat = torch.cat(orig_tokens_sample, dim=0)
+            noisy_cat = torch.cat(noisy_tokens_sample, dim=0)
+            empirical_rate = verify_effective_noise_rate(
+                orig_cat,
+                noisy_cat,
+                epsilon=rate,
+                tolerance=0.03,
+            )
+
+        total_classes = (
+            num_classes
+            if num_classes is not None
+            else (getattr(model, "num_classes", None) or max(all_labels) + 1)
+        )
+
+        all_logits = np.concatenate(all_logits_list, axis=0) if all_logits_list else None
+
+        metrics = compute_classification_metrics(
+            y_true=all_labels,
+            y_pred=all_preds,
+            y_top5=all_top5,
+            logits=all_logits,
+            num_classes=total_classes,
+        )
+
+        f1_bands = compute_species_f1_bands(
+            y_true=all_labels,
+            y_pred=all_preds,
+            num_classes=total_classes,
+            thresholds=(0.0, 0.50, 0.80, 0.90, 1.0),
+            confidences=all_confs,
+        )
+
+        predictions: List[QueryPrediction] = []
+        for i in range(len(all_labels)):
+            predictions.append(
+                QueryPrediction(
+                    query_id=f"q_{i:07d}",
+                    truth_label=all_labels[i],
+                    predicted_label=all_preds[i],
+                    top5_labels=all_top5[i],
+                    confidence=round(all_confs[i], 6),
+                )
+            )
+
+        return EvaluationResult(
+            model_name=model_name,
+            noise_rate=rate,
+            effective_noise_rate=round(empirical_rate if rate > 0.0 else 0.0, 6),
+            seed=seed,
+            metrics=metrics,
+            f1_bands=f1_bands,
+            predictions=predictions,
+        )
+
+    if noise_rates is not None:
+        sweep_results: Dict[float, EvaluationResult] = {}
+        for r in noise_rates:
+            sweep_results[r] = _eval_for_rate(r)
+        return sweep_results
+    else:
+        return _eval_for_rate(noise_rate)

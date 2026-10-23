@@ -23,10 +23,10 @@
 
 ## Handoff
 
-**Feature**: n01-remote-jupyterhub-parquet-bridge
-**Where**: C1-C19 implemented, all 19 tests green, independently verified (PASS)
-**In progress**: none
-**Next step**: N02 — Notebooks de Avaliação Limpa, Corrupção por Ruído, Entropia Hierárquica e Calibração (n02-short-benchmark-and-calibration-notebooks)
+**Feature**: n02-short-benchmark-and-calibration-notebooks
+**Where**: plan.md authored and validated (`validate_plan.py` 0 errors, 0 warnings); awaiting confirmation to proceed to checks.md + build + verify
+**In progress**: Plan review
+**Next step**: Derive `checks.md`, run `validate_checks.py`, implement S1-S4, and dispatch independent Verifier
 **Blockers**: none
-**Uncommitted**: none
+**Uncommitted**: `.specs/features/n02-short-benchmark-and-calibration-notebooks/plan.md`
 **Branch**: main

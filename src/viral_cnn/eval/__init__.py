@@ -8,11 +8,13 @@ from .metrics import (
     compute_classification_metrics,
     compute_species_f1_bands,
     compute_paired_comparison,
+    compute_species_specialist_comparison,
 )
 from .runner import (
     QueryPrediction,
     EvaluationResult,
     evaluate_model,
+    evaluate_dataloader,
     save_evaluation_artifacts,
 )
 from .latent import (
@@ -33,6 +35,12 @@ from .calibration import (
     save_reliability_diagram,
     TemperatureScaler,
     audit_model_calibration_by_noise,
+    TaxonomyEntropyAnalyzer,
+)
+from .confusion import (
+    compute_and_plot_confusion_insights,
+    get_confused_class_samples,
+    compare_confused_species_identity,
 )
 
 __all__ = [
@@ -42,9 +50,11 @@ __all__ = [
     "compute_classification_metrics",
     "compute_species_f1_bands",
     "compute_paired_comparison",
+    "compute_species_specialist_comparison",
     "QueryPrediction",
     "EvaluationResult",
     "evaluate_model",
+    "evaluate_dataloader",
     "save_evaluation_artifacts",
     "extract_latent_embeddings",
     "evaluate_cosine_knn",
@@ -61,4 +71,8 @@ __all__ = [
     "save_reliability_diagram",
     "TemperatureScaler",
     "audit_model_calibration_by_noise",
+    "TaxonomyEntropyAnalyzer",
+    "compute_and_plot_confusion_insights",
+    "get_confused_class_samples",
+    "compare_confused_species_identity",
 ]

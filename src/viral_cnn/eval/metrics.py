@@ -152,16 +152,35 @@ def compute_species_f1_bands(
     y_true: Union[np.ndarray, List[int]],
     y_pred: Union[np.ndarray, List[int]],
     num_classes: int,
+    thresholds: Tuple[float, ...] = (0.0, 0.50, 0.80, 0.95, 1.0),
+    confidences: Optional[Union[np.ndarray, List[float]]] = None,
 ) -> Dict[str, Any]:
     """
-    Partitions per-species F1-scores into four continuous, gapless performance bands:
-      - band_0_to_50: [0.00, 0.50)
-      - band_50_to_80: [0.50, 0.80)
-      - band_80_to_95: [0.80, 0.95)
-      - band_95_to_100: [0.95, 1.00] (closed on right)
+    Partitions per-species F1-scores into continuous, gapless performance bands.
+
+    Parameters:
+      y_true: Ground truth class indices [0 .. num_classes - 1].
+      y_pred: Predicted class indices [0 .. num_classes - 1].
+      num_classes: Total declared class count.
+      thresholds: Strictly increasing tuple of cutoffs spanning [0.0, 1.0].
+                  Default: (0.0, 0.50, 0.80, 0.95, 1.0).
+                  Table 4: (0.0, 0.50, 0.80, 0.90, 1.0).
+      confidences: Optional per-sample prediction confidence values aligned with y_true.
 
     Guarantees that the sum of counts across all bands strictly equals num_classes.
     """
+    if len(thresholds) < 2:
+        raise ValueError("thresholds must contain at least 2 cutoff values spanning [0.0, 1.0]")
+    if thresholds[0] != 0.0 or thresholds[-1] != 1.0:
+        raise ValueError(
+            f"thresholds must start at 0.0 and end at 1.0, got start={thresholds[0]}, end={thresholds[-1]}"
+        )
+    for i in range(len(thresholds) - 1):
+        if thresholds[i] >= thresholds[i + 1]:
+            raise ValueError(
+                f"thresholds must be strictly increasing, got {thresholds[i]} >= {thresholds[i + 1]}"
+            )
+
     y_true_np = np.asarray(y_true, dtype=np.int64)
     y_pred_np = np.asarray(y_pred, dtype=np.int64)
 
@@ -171,22 +190,62 @@ def compute_species_f1_bands(
         num_classes=num_classes,
     )
 
-    bands = {
-        "band_0_to_50": {"range": "[0.00, 0.50)", "count": 0, "percent": 0.0},
-        "band_50_to_80": {"range": "[0.50, 0.80)", "count": 0, "percent": 0.0},
-        "band_80_to_95": {"range": "[0.80, 0.95)", "count": 0, "percent": 0.0},
-        "band_95_to_100": {"range": "[0.95, 1.00]", "count": 0, "percent": 0.0},
-    }
+    # Optional per-class average confidence
+    class_mean_conf: Optional[np.ndarray] = None
+    if confidences is not None:
+        confs_np = np.asarray(confidences, dtype=np.float64)
+        if len(confs_np) != len(y_true_np):
+            raise ValueError(
+                f"Length mismatch: confidences has {len(confs_np)} samples but y_true has {len(y_true_np)}"
+            )
+        class_mean_conf = np.zeros(num_classes, dtype=np.float64)
+        sample_counts = np.bincount(
+            y_true_np[(y_true_np >= 0) & (y_true_np < num_classes)],
+            minlength=num_classes,
+        )[:num_classes]
+        for c in range(num_classes):
+            mask_c = (y_true_np == c)
+            if mask_c.any():
+                class_mean_conf[c] = float(np.mean(confs_np[mask_c]))
 
-    for f1 in per_class_f1:
-        if f1 < 0.50:
-            bands["band_0_to_50"]["count"] += 1
-        elif f1 < 0.80:
-            bands["band_50_to_80"]["count"] += 1
-        elif f1 < 0.95:
-            bands["band_80_to_95"]["count"] += 1
-        else:
-            bands["band_95_to_100"]["count"] += 1
+    bands: Dict[str, Dict[str, Any]] = {}
+    band_keys: List[str] = []
+    band_class_indices: Dict[str, List[int]] = {}
+
+    for i in range(len(thresholds) - 1):
+        t_low = thresholds[i]
+        t_high = thresholds[i + 1]
+        is_last = (i == len(thresholds) - 2)
+        range_str = f"[{t_low:.2f}, {t_high:.2f}]" if is_last else f"[{t_low:.2f}, {t_high:.2f})"
+        key = f"band_{int(round(t_low * 100))}_to_{int(round(t_high * 100))}"
+        band_keys.append(key)
+        band_class_indices[key] = []
+        bands[key] = {
+            "range": range_str,
+            "count": 0,
+            "percent": 0.0,
+        }
+        if confidences is not None:
+            bands[key]["mean_confidence"] = 0.0
+
+    for c_idx, f1 in enumerate(per_class_f1):
+        allocated = False
+        for i in range(len(thresholds) - 1):
+            t_low = thresholds[i]
+            t_high = thresholds[i + 1]
+            is_last = (i == len(thresholds) - 2)
+            in_band = (t_low <= f1 <= t_high) if is_last else (t_low <= f1 < t_high)
+            if in_band:
+                k = band_keys[i]
+                bands[k]["count"] += 1
+                band_class_indices[k].append(c_idx)
+                allocated = True
+                break
+        if not allocated:
+            # Handle numerical edge cases at boundary 1.0
+            last_key = band_keys[-1]
+            bands[last_key]["count"] += 1
+            band_class_indices[last_key].append(c_idx)
 
     total_allocated = sum(b["count"] for b in bands.values())
     if total_allocated != num_classes:
@@ -195,12 +254,145 @@ def compute_species_f1_bands(
             f"but num_classes is {num_classes}"
         )
 
-    for b in bands.values():
+    for k, b in bands.items():
         b["percent"] = round(100.0 * b["count"] / num_classes, 2)
+        if confidences is not None and class_mean_conf is not None:
+            c_indices = band_class_indices[k]
+            if c_indices:
+                b["mean_confidence"] = round(float(np.mean(class_mean_conf[c_indices])), 4)
+            else:
+                b["mean_confidence"] = 0.0
 
     return {
         "total_classes": num_classes,
         "bands": bands,
+    }
+
+
+def compute_species_specialist_comparison(
+    y_true: Union[np.ndarray, List[int]],
+    preds_resnet: Union[np.ndarray, List[int]],
+    preds_convnext: Union[np.ndarray, List[int]],
+    confs_resnet: Optional[Union[np.ndarray, List[float]]] = None,
+    confs_convnext: Optional[Union[np.ndarray, List[float]]] = None,
+    species_names: Optional[Dict[int, str]] = None,
+    num_classes: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Computes per-species specialist comparison between ResNet50 and ConvNeXt models.
+    Matches the historical logic from long/cnn-long-voter-compare.ipynb (cell 16)
+    and resolves Table 4 / Note 45 tie accounting:
+      - convnext_superior: ConvNeXt has strictly more correct predictions than ResNet50
+      - resnet_superior: ResNet50 has strictly more correct predictions than ConvNeXt
+      - ties: both models achieved equal correct predictions (> 0)
+      - both_zero: both models failed completely (0 correct predictions)
+
+    Conservation invariant:
+      convnext_superior + resnet_superior + ties + both_zero == total_evaluated_species
+    """
+    y_true_np = np.asarray(y_true, dtype=np.int64)
+    p_res = np.asarray(preds_resnet, dtype=np.int64)
+    p_conv = np.asarray(preds_convnext, dtype=np.int64)
+
+    n_samples = len(y_true_np)
+    if len(p_res) != n_samples or len(p_conv) != n_samples:
+        raise ValueError(
+            f"Length mismatch: y_true ({n_samples}), preds_resnet ({len(p_res)}), preds_convnext ({len(p_conv)})"
+        )
+
+    total_classes = (
+        num_classes
+        if num_classes is not None
+        else max(int(np.max(y_true_np)), int(np.max(p_res)), int(np.max(p_conv))) + 1
+    )
+
+    c_res = (
+        np.asarray(confs_resnet, dtype=np.float64)
+        if confs_resnet is not None
+        else None
+    )
+    c_conv = (
+        np.asarray(confs_convnext, dtype=np.float64)
+        if confs_convnext is not None
+        else None
+    )
+
+    # Per-class F1
+    f1_res, _, _ = compute_f1_scores(y_true_np, p_res, total_classes)
+    f1_conv, _, _ = compute_f1_scores(y_true_np, p_conv, total_classes)
+
+    # Unique evaluated species present in y_true
+    unique_species = np.unique(y_true_np[(y_true_np >= 0) & (y_true_np < total_classes)])
+    unique_species.sort()
+
+    convnext_wins = 0
+    resnet_wins = 0
+    ties = 0
+    both_zero = 0
+
+    per_species_list: List[Dict[str, Any]] = []
+
+    for sp_id in unique_species:
+        mask = (y_true_np == sp_id)
+        n_sp = int(mask.sum())
+        if n_sp == 0:
+            continue
+
+        acertos_res = int((p_res[mask] == sp_id).sum())
+        acertos_conv = int((p_conv[mask] == sp_id).sum())
+
+        acc_res = float(acertos_res / n_sp)
+        acc_conv = float(acertos_conv / n_sp)
+
+        conf_res = float(np.mean(c_res[mask])) if c_res is not None else None
+        conf_conv = float(np.mean(c_conv[mask])) if c_conv is not None else None
+
+        if acertos_conv > acertos_res:
+            winner = "convnext_superior"
+            convnext_wins += 1
+        elif acertos_res > acertos_conv:
+            winner = "resnet_superior"
+            resnet_wins += 1
+        elif acertos_res > 0 and acertos_res == acertos_conv:
+            winner = "ties"
+            ties += 1
+        else:
+            winner = "both_zero"
+            both_zero += 1
+
+        sp_name = (
+            species_names.get(sp_id, f"Species_{sp_id}")
+            if species_names
+            else f"Species_{sp_id}"
+        )
+
+        per_species_list.append({
+            "species_id": int(sp_id),
+            "species_name": sp_name,
+            "samples": n_sp,
+            "correct_resnet": acertos_res,
+            "correct_convnext": acertos_conv,
+            "accuracy_resnet": round(acc_res, 4),
+            "accuracy_convnext": round(acc_conv, 4),
+            "f1_resnet": round(float(f1_res[sp_id]), 6),
+            "f1_convnext": round(float(f1_conv[sp_id]), 6),
+            "confidence_resnet": round(conf_res, 4) if conf_res is not None else None,
+            "confidence_convnext": round(conf_conv, 4) if conf_conv is not None else None,
+            "winner": winner,
+        })
+
+    total_evaluated = len(unique_species)
+    assert (
+        convnext_wins + resnet_wins + ties + both_zero == total_evaluated
+    ), "Specialist comparison category conservation failed"
+
+    return {
+        "convnext_superior": convnext_wins,
+        "resnet_superior": resnet_wins,
+        "ties": ties,
+        "both_zero": both_zero,
+        "total_evaluated_species": total_evaluated,
+        "per_species": per_species_list,
     }
 
 
