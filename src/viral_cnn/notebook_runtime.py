@@ -86,7 +86,8 @@ class JupyterHubDataTopology:
             "checkpoints": {},
         }
         for name, spec in REGISTERED_VARIANTS.items():
-            p["checkpoints"][name] = str(self.root / spec.checkpoint_rel_path)
+            resolved = self.resolve_checkpoint_path(name)
+            p["checkpoints"][name] = str(resolved if resolved is not None else self.root / spec.checkpoint_rel_path)
         return p
 
     def resolve_checkpoint_path(self, variant_name: str) -> Optional[Path]:
@@ -97,16 +98,19 @@ class JupyterHubDataTopology:
         spec = REGISTERED_VARIANTS.get(variant_name)
         if not spec:
             return None
-        candidate = self.root / spec.checkpoint_rel_path
-        if candidate.exists():
-            return candidate
-        alt1 = self.root / "cnn_kraken" / Path(spec.checkpoint_rel_path).name
-        if alt1.exists():
-            return alt1
-        alt2 = self.root / Path(spec.checkpoint_rel_path).name
-        if alt2.exists():
-            return alt2
-        return candidate
+        rel_p = Path(spec.checkpoint_rel_path)
+        candidates = [
+            self.root / rel_p,
+            self.root / rel_p.parts[0] / rel_p.name,  # e.g. cnn_kraken_species/best_resnet... (without checkpoints/ subdir)
+            self.root.parent / rel_p,
+            self.root.parent / rel_p.parts[0] / rel_p.name,
+            self.root / "cnn_kraken" / rel_p.name,
+            self.root / rel_p.name,
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return self.root / rel_p
 
 
 def get_git_commit() -> str:
@@ -204,6 +208,10 @@ def setup_notebook_runtime(
             resolved_root = project_root
     else:
         resolved_root = project_root
+
+    # Auto-climb: If resolved_root doesn't contain cnn_kraken, but its parent workspace does, adopt parent
+    if not (resolved_root / "cnn_kraken").exists() and (resolved_root.parent / "cnn_kraken").exists():
+        resolved_root = resolved_root.parent.resolve()
 
     # Determine smoke test mode
     if smoke_test is not None:
