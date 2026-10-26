@@ -42,7 +42,7 @@ class TestArtifactPathLogging(unittest.TestCase):
     def test_log_artifact_path_output_when_enabled(self):
         """log_artifact_path prints to stdout with standard [LOG_PATH] prefix."""
         with patch.dict(os.environ, {"LOG_PATH": "1"}):
-            with patch("sys.stdout", new=StringIO()) as fake_out:
+            with patch("sys.stderr", new=StringIO()) as fake_out:
                 log_artifact_path("checkpoint", "/path/to/model.pt", extra="test")
                 output = fake_out.getvalue()
                 self.assertIn("[LOG_PATH] Loading checkpoint from: /path/to/model.pt", output)
@@ -51,7 +51,7 @@ class TestArtifactPathLogging(unittest.TestCase):
     def test_log_artifact_path_suppressed_when_disabled(self):
         """log_artifact_path produces no stdout when disabled."""
         with patch.dict(os.environ, {"LOG_PATH": "0"}):
-            with patch("sys.stdout", new=StringIO()) as fake_out:
+            with patch("sys.stderr", new=StringIO()) as fake_out:
                 log_artifact_path("checkpoint", "/path/to/model.pt")
                 self.assertEqual(fake_out.getvalue(), "")
 
@@ -65,7 +65,7 @@ class TestArtifactPathLogging(unittest.TestCase):
             }).to_parquet(pq_path, index=False)
 
             with patch.dict(os.environ, {"LOG_PATH": "1"}):
-                with patch("sys.stdout", new=StringIO()) as fake_out:
+                with patch("sys.stderr", new=StringIO()) as fake_out:
                     _ = ParquetBatchIterableDataset([str(pq_path)], batch_size=1)
                     output = fake_out.getvalue()
                     self.assertIn("[LOG_PATH] Loading DataLoader/ParquetDataset from:", output)
@@ -78,7 +78,7 @@ class TestArtifactPathLogging(unittest.TestCase):
             csv_path.write_text("id,species\n1,Virus A\n")
 
             with patch.dict(os.environ, {"LOG_PATH": "1"}):
-                with patch("sys.stdout", new=StringIO()) as fake_out:
+                with patch("sys.stderr", new=StringIO()) as fake_out:
                     _ = load_taxonomy_mapping(csv_path)
                     output = fake_out.getvalue()
                     self.assertIn("[LOG_PATH] Loading taxonomy mapping from:", output)
@@ -92,7 +92,7 @@ class TestArtifactPathLogging(unittest.TestCase):
             torch.save(model.state_dict(), ckpt_path)
 
             with patch.dict(os.environ, {"LOG_PATH": "1"}):
-                with patch("sys.stdout", new=StringIO()) as fake_out:
+                with patch("sys.stderr", new=StringIO()) as fake_out:
                     eval_model = ResNet50_1D(num_classes=5)
                     load_model_checkpoint(eval_model, ckpt_path)
                     output = fake_out.getvalue()

@@ -89,6 +89,25 @@ class JupyterHubDataTopology:
             p["checkpoints"][name] = str(self.root / spec.checkpoint_rel_path)
         return p
 
+    def resolve_checkpoint_path(self, variant_name: str) -> Optional[Path]:
+        """
+        Resolves existing checkpoint path for a registered model variant,
+        checking canonical path and common directory variations.
+        """
+        spec = REGISTERED_VARIANTS.get(variant_name)
+        if not spec:
+            return None
+        candidate = self.root / spec.checkpoint_rel_path
+        if candidate.exists():
+            return candidate
+        alt1 = self.root / "cnn_kraken" / Path(spec.checkpoint_rel_path).name
+        if alt1.exists():
+            return alt1
+        alt2 = self.root / Path(spec.checkpoint_rel_path).name
+        if alt2.exists():
+            return alt2
+        return candidate
+
 
 def get_git_commit() -> str:
     """Retrieves current Git commit hash or fallback."""
@@ -132,6 +151,22 @@ def get_library_versions() -> Dict[str, str]:
     return versions
 
 
+def is_remote_server() -> bool:
+    """
+    Checks if running in remote server environment mode (default: True).
+    Returns False if either REMOTE_SERVER or remote_server is explicitly set to
+    'false', '0', 'no', 'f', 'off', or 'local'.
+    """
+    raw_val = None
+    for k in ("remote_server", "REMOTE_SERVER"):
+        if k in os.environ:
+            raw_val = os.environ[k]
+            break
+    if raw_val is not None:
+        return raw_val.strip().lower() not in ("false", "0", "no", "f", "off", "local")
+    return True
+
+
 def setup_notebook_runtime(
     data_root: Optional[Union[str, Path]] = None,
     seed: int = 42,
@@ -140,32 +175,46 @@ def setup_notebook_runtime(
 ) -> RuntimeContext:
     """
     Initializes notebook execution runtime, seeds PRNGs, and determines environment.
+    Follows AD-017 for remote server vs local execution contracts.
     """
     seed_everything(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    remote_mode = is_remote_server()
 
-    # Resolve DATA_ROOT
+    # Detect repository project_root by walking up
+    curr = Path.cwd().resolve()
+    project_root = curr
+    for r in [curr, curr.parent, curr.parent.parent, curr.parent.parent.parent, curr.parent.parent.parent.parent]:
+        if (r / "src" / "viral_cnn").exists():
+            project_root = r
+            break
+
+    # Resolve DATA_ROOT (AD-017)
     if data_root is not None:
         resolved_root = Path(data_root).resolve()
     elif "DATA_ROOT" in os.environ:
         resolved_root = Path(os.environ["DATA_ROOT"]).resolve()
+    elif remote_mode:
+        # Remote server topology: check parent workspace containing cnn_kraken/ or standard /home/mlima/workspace
+        if (project_root.parent / "cnn_kraken").exists():
+            resolved_root = project_root.parent.resolve()
+        elif Path("/home/mlima/workspace").exists():
+            resolved_root = Path("/home/mlima/workspace").resolve()
+        else:
+            resolved_root = project_root
     else:
-        # Auto-detect repository root by walking up looking for src/viral_cnn
-        curr = Path.cwd().resolve()
-        candidate = curr
-        for r in [curr, curr.parent, curr.parent.parent, curr.parent.parent.parent, curr.parent.parent.parent.parent]:
-            if (r / "src" / "viral_cnn").exists():
-                candidate = r
-                break
-        resolved_root = candidate
+        resolved_root = project_root
 
     # Determine smoke test mode
     if smoke_test is not None:
         is_smoke = smoke_test
-    elif os.environ.get("SMOKE_TEST", "0") in ("1", "true", "True"):
+    elif "SMOKE_TEST" in os.environ:
+        is_smoke = os.environ["SMOKE_TEST"].strip().lower() in ("1", "true", "yes")
+    elif not remote_mode:
+        # Local development / test mode defaults to lightweight smoke test
         is_smoke = True
     elif auto_smoke_fallback:
-        # Check if actual remote data exists
+        # Remote mode: verify that species dataset exists at resolved_root
         topology = JupyterHubDataTopology(resolved_root)
         species_dir = Path(topology.paths["short"]["species_parquet_dir"])
         is_smoke = not species_dir.exists()

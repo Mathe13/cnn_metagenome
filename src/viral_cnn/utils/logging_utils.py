@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+import sys
 from typing import Any, Optional, Sequence, Union
 
 logger = logging.getLogger("viral_cnn.paths")
@@ -52,6 +53,6 @@ def log_artifact_path(
     if extra:
         msg += f" | {extra}"
 
-    print(msg)
+    print(msg, file=sys.stderr)
     logger.info(msg)
 

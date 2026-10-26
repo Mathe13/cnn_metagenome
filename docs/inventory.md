@@ -86,7 +86,7 @@ Conforme formalizado na decisão **AD-006**, os dados volumosos, partições Par
 > **Registro de Bloqueio Conforme AGENTS.md e Diretriz de Execução Remota (AD-005 e AD-006):**
 > Como os arquivos `.pt` e as partições Parquet completas residem no ambiente de pesquisa/JupyterHub remoto (AD-006), o repositório Git local opera com contratos sintéticos (AD-005).
 > 1. **Ambiente Local:** O código em `src/viral_cnn`, scripts e testes automatizados utilizam fixtures determinísticos pequenos em `tests/fixtures/` e contratos sintéticos, executando em poucos segundos sem dependência de GPU ou arquivos gigabyte.
-> 2. **Ambiente Remoto (JupyterHub / Kernel Remoto):** Para inferência real, reprodução exata das tabelas e fine-tuning com GPU, os caminhos são parametrizados via arquivos YAML em `configs/` ou variável de ambiente `DATA_ROOT`, sem caminhos absolutos pessoais hardcoded no código-fonte.
+> 2. **Ambiente Remoto (JupyterHub / Kernel Remoto - AD-017):** Para inferência real, reprodução exata das tabelas e fine-tuning com GPU, a topologia é automaticamente resolvida em `/home/mlima/workspace` (ou parametrizada via `DATA_ROOT`), ativada por padrão com `REMOTE_SERVER=true` (desativada nos testes locais com `REMOTE_SERVER=False`), sem caminhos absolutos pessoais hardcoded no código-fonte.
 
 ---
 

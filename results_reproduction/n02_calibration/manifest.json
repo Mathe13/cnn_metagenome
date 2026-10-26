@@ -1,7 +1,7 @@
 {
   "notebook_id": "02_analyze_confidence_and_calibration",
-  "timestamp_utc": "2026-10-23T01:27:18.080010+00:00",
-  "git_commit": "1fd71d610290b48cdc951b3c424576a0835634a2",
+  "timestamp_utc": "2026-10-26T23:12:51.500197+00:00",
+  "git_commit": "a007431eab4d423dc231c43d68ce83ffda4adc34",
   "seed": 42,
   "data_root": "/home/matheus/Documents/cnn_metagenome",
   "is_smoke_test": true,
