@@ -267,11 +267,23 @@ def ensure_smoke_test_artifacts(
     labels = [i % 5 for i in range(num_samples_per_split)]
     pd.DataFrame({"sequence_padded": seqs, "label": labels}).to_parquet(short_test_file, index=False)
 
+    short_train_file = short_dir / "train.parquet"
+    pd.DataFrame({"sequence_padded": seqs, "label": labels}).to_parquet(short_train_file, index=False)
+
+    short_val_file = short_dir / "val.parquet"
+    pd.DataFrame({"sequence_padded": seqs, "label": labels}).to_parquet(short_val_file, index=False)
+
     genus_dir = root / "cnn_kraken" / "processed_kraken_genus_splited_parquet"
     genus_dir.mkdir(parents=True, exist_ok=True)
     genus_test_file = genus_dir / "test.parquet"
     genus_labels = [i % 3 for i in range(num_samples_per_split)]
     pd.DataFrame({"sequence_padded": seqs, "label": genus_labels}).to_parquet(genus_test_file, index=False)
+
+    genus_train_file = genus_dir / "train.parquet"
+    pd.DataFrame({"sequence_padded": seqs, "label": genus_labels}).to_parquet(genus_train_file, index=False)
+
+    genus_val_file = genus_dir / "val.parquet"
+    pd.DataFrame({"sequence_padded": seqs, "label": genus_labels}).to_parquet(genus_val_file, index=False)
 
     # 2. Long partitions (species_id, genus_id, origin_len, read_len, sequence)
     long_test_file = long_dir / "test.parquet"

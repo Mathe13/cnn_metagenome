@@ -289,9 +289,12 @@ def build_registered_model(
     checkpoint_path: Optional[Union[str, Path]] = None,
     device: str = "cpu",
     dropout_rate: Optional[float] = None,
+    data_root: Optional[Union[str, Path]] = None,
 ) -> nn.Module:
     """
     Instantiates and optionally loads weights for a registered model variant.
+    If checkpoint_path is None and data_root is provided, automatically attempts
+    to resolve the checkpoint path relative to data_root.
     """
     spec = get_model_spec(variant_name)
     dropout = dropout_rate if dropout_rate is not None else spec.dropout_rate
@@ -301,6 +304,11 @@ def build_registered_model(
         num_classes=spec.num_classes,
         dropout_rate=dropout,
     )
+
+    if checkpoint_path is None and data_root is not None:
+        cand = Path(data_root) / spec.checkpoint_rel_path
+        if cand.exists():
+            checkpoint_path = cand
 
     if checkpoint_path is not None:
         load_model_checkpoint(

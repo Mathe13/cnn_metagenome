@@ -51,12 +51,14 @@ class ControlledExperimentConfig:
     eval_interval_steps: int = 50
     amp: bool = True
     grad_clip_norm: float | None = 1.0
+    freeze_layers: Sequence[str] = ()
 
     def __post_init__(self):
         # Normalize sequences to tuples
         self.architectures = tuple(self.architectures)
         self.channels = tuple(self.channels)
         self.seeds = tuple(self.seeds)
+        self.freeze_layers = tuple(self.freeze_layers)
 
         # Validate architectures
         for arch in self.architectures:
