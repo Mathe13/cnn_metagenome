@@ -150,7 +150,14 @@ def setup_notebook_runtime(
     elif "DATA_ROOT" in os.environ:
         resolved_root = Path(os.environ["DATA_ROOT"]).resolve()
     else:
-        resolved_root = Path(".").resolve()
+        # Auto-detect repository root by walking up looking for src/viral_cnn
+        curr = Path.cwd().resolve()
+        candidate = curr
+        for r in [curr, curr.parent, curr.parent.parent, curr.parent.parent.parent, curr.parent.parent.parent.parent]:
+            if (r / "src" / "viral_cnn").exists():
+                candidate = r
+                break
+        resolved_root = candidate
 
     # Determine smoke test mode
     if smoke_test is not None:

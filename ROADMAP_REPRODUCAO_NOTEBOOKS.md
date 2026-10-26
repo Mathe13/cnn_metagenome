@@ -16,6 +16,9 @@ Este roteiro define a sequência de features sob o fluxo `tlc-spec-lean` (`PLAN 
    - Cada notebook terá uma célula inicial padronizada de configuração de ambiente (`DATA_ROOT`, `DEVICE`, `SEED = 42`, verificação de GPU/cuDF/PyArrow e validação de existência dos artefatos no JupyterHub remoto), injeção autônoma de `src/` em `sys.path` antes de importar `viral_cnn` (garantindo execução imediata via JupyterHub remoto sem depender de `pip install -e .` ou variáveis prévias de ambiente), e suportará um modo `SMOKE_TEST=1` (lote determinístico pequeno) para que `pytest` / `nbformat` / `nbclient` consigam provar a execução das células nos gates do `tlc-spec-lean` antes e durante a execução pesada no cluster remoto.
 4. **Rastreabilidade Científica:**
    - Cada execução no JupyterHub remoto salva um manifesto JSON/YAML junto às saídas Parquet/CSV contendo: identificador do notebook, commit Git, `DATA_ROOT`, checkpoints carregados (e seus hashes/metadados), split utilizado, semente (`42`), versões de Python/PyTorch/CUDA e comparação entre o valor obtido e o valor histórico do notebook original / artigo.
+5. **Rastreabilidade e Log de Caminhos (`LOG_PATH`):**
+   - Toda vez que dataloaders, datasets (ex: Parquet, CSV), modelos ou checkpoints forem instanciados ou carregados, o caminho absoluto ou relativo de origem deve ser registrado explicitamente no console e no log (ex: `[LOG_PATH] Loading ... from: <path>`).
+   - Esse comportamento é ativado por padrão (`LOG_PATH=true` ou ausente) e pode ser desativado definindo `LOG_PATH=0` ou `LOG_PATH=false`.
 
 ---
 
