@@ -23,10 +23,10 @@
 
 ## Handoff
 
-**Feature**: n05-short-motifs-and-triplets-notebooks
+**Feature**: n07-long-sequence-voter-notebooks
 **Where**: verification.md completed and validated (`validate_verification.py` 0 errors, 0 warnings); feature fully verified and closed
-**In progress**: none (N05 complete)
-**Next step**: Proceed to N06 (`n06-short-kraken2-blastn-benchmark-notebook`) in `ROADMAP_REPRODUCAO_NOTEBOOKS.md`
+**In progress**: none (N07 complete)
+**Next step**: Proceed to N08 (`n08-master-paper-regeneration-notebook`) in `ROADMAP_REPRODUCAO_NOTEBOOKS.md`
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
