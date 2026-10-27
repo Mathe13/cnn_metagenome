@@ -23,10 +23,10 @@
 
 ## Handoff
 
-**Feature**: n03-short-finetune-training-notebooks
+**Feature**: n04-short-taxonomy-and-latent-space-notebooks
 **Where**: verification.md completed and validated (`validate_verification.py` 0 errors, 0 warnings); feature fully verified and closed
-**In progress**: none (N03 complete)
-**Next step**: Proceed to N04 (`n04-short-taxonomy-and-latent-space-notebooks`) in `ROADMAP_REPRODUCAO_NOTEBOOKS.md`
+**In progress**: none (N04 complete)
+**Next step**: Proceed to N05 (`n05-short-motifs-and-triplets-notebooks`) in `ROADMAP_REPRODUCAO_NOTEBOOKS.md`
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main

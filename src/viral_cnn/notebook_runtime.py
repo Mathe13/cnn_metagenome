@@ -74,6 +74,8 @@ class JupyterHubDataTopology:
                 "species_csv": str(self.root / "dataset_kraken" / "species_name_ids.csv"),
                 "genus_csv": str(self.root / "dataset_kraken" / "genus_name_ids.csv"),
                 "kraken_blast_dir": str(self.root / "cnn_kraken" / "benchmark_kraken_blast_20_per_species"),
+                "ictv_master": str(self.root / "short" / "ICTV_Master_Species_List_2025_MSL41.v1.xlsx"),
+                "hybrid_taxonomy_parquet": str(self.root / "short" / "main_taxonomy_hybrid_CLEANSED.parquet"),
             },
             "long": {
                 "ncbi_parquet_dir": str(self.root / "processed_ncbi_splited_parquet"),
