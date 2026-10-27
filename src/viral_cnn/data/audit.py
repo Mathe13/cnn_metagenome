@@ -32,58 +32,79 @@ def canonical_sequence_hash(seq: str) -> str:
 
 
 def iter_sequence_records(
-    file_path: str | Path,
+    file_path: str | Path | list[str] | list[Path],
     seq_col: str = "sequence",
     label_col: str = "label",
     sample_size: int | None = None,
 ) -> Iterator[tuple[str, int]]:
     """
-    Iterates over (sequence, label) tuples from a CSV or Parquet file.
+    Iterates over (sequence, label) tuples from a CSV or Parquet file (or directory of Parquet partitions).
     Streams rows efficiently to avoid loading entire multi-gigabyte files into memory.
     """
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+    if isinstance(file_path, (list, tuple)):
+        files = [Path(p) for p in file_path]
+    else:
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if path.is_dir():
+            if (path / "test").is_dir():
+                files = sorted((path / "test").glob("*.parquet"))
+            elif (path / "test.parquet").exists():
+                files = [path / "test.parquet"]
+            else:
+                files = sorted(path.glob("*.parquet")) or sorted(path.rglob("*.parquet"))
+            if not files:
+                raise FileNotFoundError(f"No Parquet files found in directory: {path}")
+        else:
+            files = [path]
 
     yielded = 0
-    if path.suffix.lower() == ".csv":
-        with open(path, mode="r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            if reader.fieldnames is None or seq_col not in reader.fieldnames:
-                raise ValueError(
-                    f"Column '{seq_col}' not found in CSV header: {reader.fieldnames}"
-                )
-            has_label = label_col in reader.fieldnames
+    for path in files:
+        if path.suffix.lower() == ".csv":
+            with open(path, mode="r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames is None or seq_col not in reader.fieldnames:
+                    raise ValueError(
+                        f"Column '{seq_col}' not found in CSV header: {reader.fieldnames}"
+                    )
+                has_label = label_col in reader.fieldnames
 
-            for row in reader:
-                seq = row[seq_col].strip()
-                label = int(row[label_col]) if has_label and row[label_col] else -1
-                yield seq, label
-                yielded += 1
-                if sample_size is not None and yielded >= sample_size:
-                    break
-    elif path.suffix.lower() in (".parquet", ".pq"):
-        import pyarrow.parquet as pq
+                for row in reader:
+                    seq = row[seq_col].strip()
+                    label = int(row[label_col]) if has_label and row[label_col] else -1
+                    yield seq, label
+                    yielded += 1
+                    if sample_size is not None and yielded >= sample_size:
+                        return
+        elif path.suffix.lower() in (".parquet", ".pq"):
+            import pyarrow.parquet as pq
 
-        pf = pq.ParquetFile(path)
-        schema_names = pf.schema_arrow.names
-        if seq_col not in schema_names:
-            raise ValueError(f"Column '{seq_col}' not found in Parquet schema: {schema_names}")
-        cols = [seq_col]
-        if label_col in schema_names:
-            cols.append(label_col)
+            pf = pq.ParquetFile(path)
+            schema_names = pf.schema_arrow.names
+            actual_seq_col = seq_col
+            if actual_seq_col not in schema_names and seq_col in ("sequence", "sequence_padded", "padded_Representation"):
+                for cand in ("sequence_padded", "padded_Representation", "sequence"):
+                    if cand in schema_names:
+                        actual_seq_col = cand
+                        break
+            if actual_seq_col not in schema_names:
+                raise ValueError(f"Column '{seq_col}' not found in Parquet schema: {schema_names}")
+            cols = [actual_seq_col]
+            if label_col in schema_names:
+                cols.append(label_col)
 
-        for batch in pf.iter_batches(batch_size=8192, columns=cols):
-            batch_dict = batch.to_pydict()
-            seqs = batch_dict[seq_col]
-            labels = batch_dict.get(label_col, [-1] * len(seqs))
-            for s, l in zip(seqs, labels):
-                yield s, int(l) if l is not None else -1
-                yielded += 1
-                if sample_size is not None and yielded >= sample_size:
-                    return
-    else:
-        raise ValueError(f"Unsupported file format: {path.suffix}. Expected .csv or .parquet")
+            for batch in pf.iter_batches(batch_size=8192, columns=cols):
+                batch_dict = batch.to_pydict()
+                seqs = batch_dict[actual_seq_col]
+                labels = batch_dict.get(label_col, [-1] * len(seqs))
+                for s, l in zip(seqs, labels):
+                    yield s, int(l) if l is not None else -1
+                    yielded += 1
+                    if sample_size is not None and yielded >= sample_size:
+                        return
+        else:
+            raise ValueError(f"Unsupported file format: {path.suffix}. Expected .csv or .parquet")
 
 
 def audit_partition_duplicates(

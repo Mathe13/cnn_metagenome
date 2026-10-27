@@ -404,6 +404,42 @@ class TestNotebookRuntime(unittest.TestCase):
         res = os.popen("git status --porcelain short/ long/").read().strip()
         self.assertEqual(res, "", f"Historical directories short/ or long/ have been modified: {res}")
 
+    def test_c20_multi_split_directory_disjunction_and_sampling(self):
+        """C20: resolve_split_files, read_parquet_sample, and ParquetBatchIterableDataset never merge train+validation+test subdirs."""
+        from viral_cnn.notebook_runtime import resolve_split_files, read_parquet_sample
+
+        root_dir = Path(self.temp_dir) / "multi_split_dataset"
+        for sp_name, n_rows in [("train", 20), ("validation", 8), ("test", 6)]:
+            sp_dir = root_dir / sp_name
+            sp_dir.mkdir(parents=True, exist_ok=True)
+            df_sp = pd.DataFrame({
+                "sequence_padded": ["ACGT" * 128 for _ in range(n_rows)],
+                "label": [i % 3 for i in range(n_rows)],
+            })
+            df_sp.to_parquet(sp_dir / "part_0.parquet", index=False)
+
+        # 1. resolve_split_files resolves 'val' -> 'validation/part_0.parquet' and 'test' -> 'test/part_0.parquet'
+        val_files = resolve_split_files(root_dir, "val")
+        test_files = resolve_split_files(root_dir, "test")
+        train_files = resolve_split_files(root_dir, "train")
+        self.assertEqual(len(val_files), 1)
+        self.assertTrue(val_files[0].endswith("validation/part_0.parquet"))
+        self.assertEqual(len(test_files), 1)
+        self.assertTrue(test_files[0].endswith("test/part_0.parquet"))
+        self.assertEqual(len(train_files), 1)
+        self.assertTrue(train_files[0].endswith("train/part_0.parquet"))
+
+        # 2. ParquetBatchIterableDataset on root_dir with shuffle=False selects strictly 'test' (6 rows), not 34 rows
+        ds_test = ParquetBatchIterableDataset(root_dir, batch_size=4, shuffle=False)
+        self.assertEqual(ds_test.total_samples, 6)
+        batches = list(ds_test)
+        self.assertEqual(sum(bx.shape[0] for bx, _ in batches), 6)
+
+        # 3. read_parquet_sample streams bounded rows from split directory
+        df_sample = read_parquet_sample(root_dir, columns=["sequence_padded", "label"], max_rows=4, split="train")
+        self.assertEqual(len(df_sample), 4)
+
+
 
 if __name__ == "__main__":
     unittest.main()

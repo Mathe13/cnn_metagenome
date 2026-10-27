@@ -15,8 +15,9 @@ import logging
 import math
 from pathlib import Path
 import random
-from typing import Iterator, List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 import torch
@@ -39,7 +40,7 @@ class ParquetBatchIterableDataset(IterableDataset):
 
     def __init__(
         self,
-        file_paths: Sequence[str],
+        file_paths: Union[str, Path, Sequence[Union[str, Path]]],
         padded_column_name: str = "sequence_padded",
         label_column: str = "label",
         maxlen: int = 512,
@@ -51,14 +52,39 @@ class ParquetBatchIterableDataset(IterableDataset):
         legacy_global_rng: bool = False,
         fallback_to_cpu: bool = True,
         debug: bool = False,
+        split: Optional[str] = None,
+        max_samples: Optional[int] = None,
     ):
         super().__init__()
         if isinstance(file_paths, (str, Path)):
             p = Path(file_paths)
             if p.is_dir():
-                found = sorted(p.glob("*.parquet"))
-                if not found:
-                    found = sorted(p.rglob("*.parquet"))
+                target_split = split
+                if target_split is None:
+                    has_multi_subdirs = (p / "train").is_dir() and (p / "test").is_dir()
+                    has_multi_files = (p / "train.parquet").exists() and (p / "test.parquet").exists()
+                    if has_multi_subdirs or has_multi_files:
+                        target_split = "train" if shuffle else "test"
+                if target_split is not None:
+                    split_key = target_split.strip().lower()
+                    candidates = ["validation", "val", "valid"] if split_key in ("val", "validation", "valid") else [split_key]
+                    found: List[Path] = []
+                    for cand in candidates:
+                        sub = p / cand
+                        if sub.is_dir():
+                            found = sorted(sub.glob("*.parquet")) or sorted(sub.rglob("*.parquet"))
+                            if found:
+                                break
+                        f_cand = p / f"{cand}.parquet"
+                        if f_cand.exists():
+                            found = [f_cand]
+                            break
+                    if not found:
+                        found = sorted(p.glob("*.parquet")) or sorted(p.rglob("*.parquet"))
+                else:
+                    found = sorted(p.glob("*.parquet"))
+                    if not found:
+                        found = sorted(p.rglob("*.parquet"))
                 self.file_paths = [str(f) for f in found]
             else:
                 self.file_paths = [str(p)]
@@ -75,12 +101,24 @@ class ParquetBatchIterableDataset(IterableDataset):
         self.legacy_global_rng = legacy_global_rng
         self.fallback_to_cpu = fallback_to_cpu
         self.debug = debug
+        self.split = split
+        self.max_samples = max_samples
 
         self.mapping = {n: i for i, n in enumerate(self.nucleotides)}
         self.num_features = len(self.nucleotides)
 
+        # Precompute ASCII lookup table for vectorized sequence tokenization
+        self._ascii_lut = np.full(256, self.num_features, dtype=np.int64)
+        for idx, nuc in enumerate(self.nucleotides):
+            if len(nuc) == 1 and ord(nuc) < 256:
+                self._ascii_lut[ord(nuc)] = idx
+
         # Fast CPU metadata read
-        self.total_samples = self._calculate_total_samples_fast()
+        raw_total = self._calculate_total_samples_fast()
+        if self.max_samples is not None and self.max_samples > 0:
+            self.total_samples = min(raw_total, self.max_samples) if raw_total > 0 else self.max_samples
+        else:
+            self.total_samples = raw_total
         log_artifact_path(
             "DataLoader/ParquetDataset",
             self.file_paths,
@@ -136,6 +174,7 @@ class ParquetBatchIterableDataset(IterableDataset):
                 worker_rng = random.Random(self.seed + worker_id)
                 worker_rng.shuffle(my_files)
 
+        yielded_samples = 0
         for file_path in my_files:
             if self.backend == "cudf":
                 try:
@@ -149,48 +188,75 @@ class ParquetBatchIterableDataset(IterableDataset):
             else:
                 use_cudf = False
 
-            if use_cudf:
-                yield from self._iter_cudf(file_path)
-            else:
-                yield from self._iter_cpu(file_path)
+            it = self._iter_cudf(file_path) if use_cudf else self._iter_cpu(file_path)
+            for bx, by in it:
+                if self.max_samples is not None and self.max_samples > 0:
+                    rem = self.max_samples - yielded_samples
+                    if rem <= 0:
+                        return
+                    if bx.shape[0] > rem:
+                        bx = bx[:rem]
+                        by = by[:rem]
+                yielded_samples += int(bx.shape[0])
+                yield bx, by
+                if self.max_samples is not None and self.max_samples > 0 and yielded_samples >= self.max_samples:
+                    return
+
+    def _tokenize_batch(self, inputs_list: Sequence[str]) -> torch.Tensor:
+        """
+        Vectorized tokenization of DNA sequence strings into integer matrix [0..num_features]
+        using precomputed ASCII lookup table. Preserves exact parity with character mapping.
+        """
+        batch_len = len(inputs_list)
+        if batch_len == 0:
+            return torch.empty((0, self.maxlen), dtype=torch.long)
+        try:
+            joined = "".join(
+                s if len(s) == self.maxlen else s[: self.maxlen].ljust(self.maxlen, " ")
+                for s in inputs_list
+            )
+            raw_bytes = joined.encode("ascii")
+            if len(raw_bytes) == batch_len * self.maxlen:
+                arr = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(batch_len, self.maxlen)
+                tokens = self._ascii_lut[arr]
+                return torch.from_numpy(tokens)
+        except Exception:
+            pass
+
+        tokenized_list = [
+            [self.mapping.get(base, self.num_features) for base in seq[: self.maxlen]]
+            + [self.num_features] * max(0, self.maxlen - len(seq))
+            for seq in inputs_list
+        ]
+        return torch.tensor(tokenized_list, dtype=torch.long)
 
     def _iter_cpu(self, file_path: str) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
         try:
-            # Inspect columns to handle fallback
-            parquet_schema = pq.read_schema(file_path)
-            seq_col = self._resolve_sequence_column(parquet_schema.names)
-            cols_to_load = [seq_col]
-            if self.label_column in parquet_schema.names:
-                cols_to_load.append(self.label_column)
-
-            partition_df = pd.read_parquet(file_path, engine="pyarrow", columns=cols_to_load)
+            pf = pq.ParquetFile(file_path)
+            schema_names = pf.schema_arrow.names
+            seq_col = self._resolve_sequence_column(schema_names)
+            has_label = self.label_column in schema_names
+            cols_to_load = [seq_col] + ([self.label_column] if has_label else [])
         except Exception as e:
             logger.error(f"Failed to read parquet partition {file_path}: {e}")
             return
 
-        num_rows = len(partition_df)
-        has_label = self.label_column in partition_df.columns
+        try:
+            for record_batch in pf.iter_batches(batch_size=self.batch_size, columns=cols_to_load):
+                inputs_list = record_batch.column(seq_col).to_pylist()
+                if not inputs_list:
+                    continue
+                if has_label:
+                    labels_raw = record_batch.column(self.label_column).to_numpy(zero_copy_only=False)
+                    labels_tensor = torch.from_numpy(np.array(labels_raw, dtype=np.int64, copy=True))
+                else:
+                    labels_tensor = torch.zeros(len(inputs_list), dtype=torch.long)
 
-        for i in range(0, num_rows, self.batch_size):
-            end_index = min(i + self.batch_size, num_rows)
-            batch_df = partition_df.iloc[i:end_index]
-
-            inputs_list = batch_df[seq_col].tolist()
-            if has_label:
-                labels_raw = batch_df[self.label_column].to_numpy()
-                labels_tensor = torch.as_tensor(labels_raw, dtype=torch.long)
-            else:
-                labels_tensor = torch.zeros(len(inputs_list), dtype=torch.long)
-
-            # Tokenize sequence to integer matrix [0..4]
-            tokenized_list = [
-                [self.mapping.get(base, self.num_features) for base in seq[: self.maxlen]]
-                + [self.num_features] * max(0, self.maxlen - len(seq))
-                for seq in inputs_list
-            ]
-            inputs_tensor = torch.tensor(tokenized_list, dtype=torch.long)
-
-            yield inputs_tensor, labels_tensor
+                inputs_tensor = self._tokenize_batch(inputs_list)
+                yield inputs_tensor, labels_tensor
+        except Exception as e:
+            logger.error(f"Failed while iterating parquet partition {file_path}: {e}")
+            return
 
     def _iter_cudf(self, file_path: str) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
         try:
@@ -220,12 +286,10 @@ class ParquetBatchIterableDataset(IterableDataset):
             else:
                 labels_tensor = torch.zeros(len(inputs_list), dtype=torch.long)
 
-            tokenized_list = [
-                [self.mapping.get(base, self.num_features) for base in seq[: self.maxlen]]
-                + [self.num_features] * max(0, self.maxlen - len(seq))
-                for seq in inputs_list
-            ]
-            inputs_tensor = torch.tensor(tokenized_list, dtype=torch.long)
-
+            inputs_tensor = self._tokenize_batch(inputs_list)
             yield inputs_tensor, labels_tensor
+
+
+ParquetCPUDataset = ParquetBatchIterableDataset
+
 

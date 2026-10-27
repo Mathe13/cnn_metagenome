@@ -38,50 +38,89 @@ def compute_and_plot_confusion_insights(
     mapping_csv_path: Optional[str] = None,
     col_name: str = "species",
     show: bool = False,
+    max_batches: Optional[int] = None,
 ) -> List[ConfusedPairInfo]:
     """
     Computes row-normalized confusion matrix and identifies Top-K most confused class pairs.
+    Uses sparse O(N) pair counting to avoid allocating dense (13683 x 13683) matrices in RAM.
 
     Returns:
         List of tuples: [(confusion_score, true_label_0based, pred_label_0based), ...]
     """
+    dev = torch.device(device) if isinstance(device, str) else device
     model.eval()
-    all_labels: List[int] = []
-    all_preds: List[int] = []
+    model.to(dev)
+    amp_enabled = dev.type == "cuda"
 
+    label_chunks: List[np.ndarray] = []
+    pred_chunks: List[np.ndarray] = []
+
+    batch_idx = 0
     with torch.no_grad():
         for inputs, labels in test_loader:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+            if inputs.dim() == 3 and inputs.shape[0] == 1:
+                inputs = inputs.squeeze(0)
+            if labels.dim() == 2 and labels.shape[0] == 1:
+                labels = labels.squeeze(0)
+
+            inputs = inputs.to(dev, non_blocking=amp_enabled)
+            with torch.amp.autocast("cuda", enabled=amp_enabled):
+                outputs = model(inputs)
             preds = torch.argmax(outputs, dim=1)
 
-            all_labels.extend(labels.cpu().tolist())
-            all_preds.extend(preds.cpu().tolist())
+            label_chunks.append(labels.detach().cpu().numpy().astype(np.int64))
+            pred_chunks.append(preds.detach().cpu().numpy().astype(np.int64))
+            batch_idx += 1
 
-    y_true = np.array(all_labels)
-    y_pred = np.array(all_preds)
+    if not label_chunks:
+        return []
 
-    cm = confusion_matrix(y_true, y_pred, labels=range(num_classes))
-    row_sums = cm.sum(axis=1)[:, np.newaxis]
-    row_sums[row_sums == 0] = 1.0  # avoid division by zero
-    cm_normalized = cm.astype(float) / row_sums
+    y_true = np.concatenate(label_chunks, axis=0)
+    y_pred = np.concatenate(pred_chunks, axis=0)
+
+    valid_mask = (y_true >= 0) & (y_true < num_classes) & (y_pred >= 0) & (y_pred < num_classes)
+    yt = y_true[valid_mask]
+    yp = y_pred[valid_mask]
+
+    row_sums = np.bincount(yt, minlength=num_classes)[:num_classes].astype(np.float64)
+    row_sums[row_sums == 0.0] = 1.0
+
+    off_mask = yt != yp
+    yt_off = yt[off_mask]
+    yp_off = yp[off_mask]
 
     confused_pairs: List[ConfusedPairInfo] = []
-    for i in range(num_classes):
-        for j in range(num_classes):
-            if i != j:
-                score = float(cm_normalized[i, j])
-                if score > 0.0:
-                    confused_pairs.append((score, i, j))
+    if yt_off.size > 0:
+        pair_keys = yt_off * np.int64(num_classes) + yp_off
+        uniq_keys, pair_counts = np.unique(pair_keys, return_counts=True)
+        i_arr = uniq_keys // np.int64(num_classes)
+        j_arr = uniq_keys % np.int64(num_classes)
+        scores = pair_counts.astype(np.float64) / row_sums[i_arr]
+        for s, i_val, j_val in zip(scores.tolist(), i_arr.tolist(), j_arr.tolist()):
+            if s > 0.0:
+                confused_pairs.append((float(s), int(i_val), int(j_val)))
 
     confused_pairs.sort(key=lambda x: x[0], reverse=True)
     top_k_confused = confused_pairs[:top_k_confusion]
 
     if show:
         fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-        im = axes[0].imshow(cm_normalized, interpolation="nearest", cmap=plt.cm.Blues)
+        if num_classes <= 2000:
+            cm = confusion_matrix(yt, yp, labels=range(num_classes))
+            cm_normalized = cm.astype(float) / row_sums[:, np.newaxis]
+            im = axes[0].imshow(cm_normalized, interpolation="nearest", cmap=plt.cm.Blues)
+            fig.colorbar(im, ax=axes[0])
+        else:
+            axes[0].text(
+                0.5,
+                0.5,
+                f"Sparse Confusion Matrix ({num_classes} classes)\nDense rendering skipped to preserve RAM",
+                ha="center",
+                va="center",
+            )
         axes[0].set_title("Normalized Confusion Matrix")
-        fig.colorbar(im, ax=axes[0])
         axes[0].set_xlabel("Predicted Label")
         axes[0].set_ylabel("True Label")
 

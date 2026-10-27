@@ -179,8 +179,10 @@ class ControlledTrainer:
         total_samples = 0
         correct_top1 = 0
 
-        all_preds: list[np.ndarray] = []
-        all_targets: list[np.ndarray] = []
+        num_c = int(self.config.num_classes)
+        support_counts = np.zeros(num_c, dtype=np.int64)
+        pred_counts = np.zeros(num_c, dtype=np.int64)
+        tp_counts = np.zeros(num_c, dtype=np.int64)
 
         batch_count = 0
         autocast_device = "cuda" if self.device.type == "cuda" and torch.cuda.is_available() else "cpu"
@@ -197,8 +199,8 @@ class ControlledTrainer:
                     generator=generator,
                 )
 
-            batch_x = batch_x.to(self.device)
-            batch_y = batch_y.to(self.device)
+            batch_x = batch_x.to(self.device, non_blocking=(self.device.type == "cuda"))
+            batch_y = batch_y.to(self.device, non_blocking=(self.device.type == "cuda"))
             b_size = batch_x.size(0)
 
             self.optimizer.zero_grad()
@@ -233,8 +235,14 @@ class ControlledTrainer:
             preds = torch.argmax(logits, dim=1)
             correct_top1 += int((preds == batch_y).sum().item())
 
-            all_preds.append(preds.detach().cpu().numpy())
-            all_targets.append(batch_y.detach().cpu().numpy())
+            y_pred_b = preds.detach().cpu().numpy().astype(np.int64)
+            y_true_b = batch_y.detach().cpu().numpy().astype(np.int64)
+            valid_t = (y_true_b >= 0) & (y_true_b < num_c)
+            valid_p = (y_pred_b >= 0) & (y_pred_b < num_c)
+            support_counts += np.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
+            pred_counts += np.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
+            match_m = (y_true_b == y_pred_b) & valid_t
+            tp_counts += np.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
 
             batch_count += 1
             self.current_step += 1
@@ -249,14 +257,13 @@ class ControlledTrainer:
                 "learning_rate": self.get_current_lr(),
             }
 
-        y_pred_arr = np.concatenate(all_preds)
-        y_true_arr = np.concatenate(all_targets)
-
-        _, macro_f1, weighted_f1 = compute_f1_scores(
-            y_true=y_true_arr,
-            y_pred=y_pred_arr,
-            num_classes=self.config.num_classes,
-        )
+        denom = pred_counts + support_counts
+        per_class_f1 = np.zeros(num_c, dtype=np.float64)
+        valid_denom = denom > 0
+        per_class_f1[valid_denom] = (2.0 * tp_counts[valid_denom]) / denom[valid_denom]
+        macro_f1 = float(np.mean(per_class_f1))
+        total_sup = int(np.sum(support_counts))
+        weighted_f1 = float(np.sum(per_class_f1 * support_counts) / total_sup) if total_sup > 0 else 0.0
 
         return {
             "train_loss": float(running_loss / total_samples),
@@ -282,8 +289,10 @@ class ControlledTrainer:
         correct_top1 = 0
         correct_top5 = 0
 
-        all_preds: list[np.ndarray] = []
-        all_targets: list[np.ndarray] = []
+        num_c = int(self.config.num_classes)
+        support_counts = np.zeros(num_c, dtype=np.int64)
+        pred_counts = np.zeros(num_c, dtype=np.int64)
+        tp_counts = np.zeros(num_c, dtype=np.int64)
 
         batch_count = 0
         autocast_device = "cuda" if self.device.type == "cuda" and torch.cuda.is_available() else "cpu"
@@ -300,8 +309,8 @@ class ControlledTrainer:
                         generator=generator,
                     )
 
-                batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_x = batch_x.to(self.device, non_blocking=(self.device.type == "cuda"))
+                batch_y = batch_y.to(self.device, non_blocking=(self.device.type == "cuda"))
                 b_size = batch_x.size(0)
 
                 with torch.autocast(device_type=autocast_device, enabled=self.use_amp):
@@ -322,8 +331,14 @@ class ControlledTrainer:
                 else:
                     correct_top5 = correct_top1
 
-                all_preds.append(preds.cpu().numpy())
-                all_targets.append(batch_y.cpu().numpy())
+                y_pred_b = preds.cpu().numpy().astype(np.int64)
+                y_true_b = batch_y.cpu().numpy().astype(np.int64)
+                valid_t = (y_true_b >= 0) & (y_true_b < num_c)
+                valid_p = (y_pred_b >= 0) & (y_pred_b < num_c)
+                support_counts += np.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
+                pred_counts += np.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
+                match_m = (y_true_b == y_pred_b) & valid_t
+                tp_counts += np.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
                 batch_count += 1
 
         if total_samples == 0:
@@ -336,14 +351,13 @@ class ControlledTrainer:
                 "total_samples": 0,
             }
 
-        y_pred_arr = np.concatenate(all_preds)
-        y_true_arr = np.concatenate(all_targets)
-
-        _, macro_f1, weighted_f1 = compute_f1_scores(
-            y_true=y_true_arr,
-            y_pred=y_pred_arr,
-            num_classes=self.config.num_classes,
-        )
+        denom = pred_counts + support_counts
+        per_class_f1 = np.zeros(num_c, dtype=np.float64)
+        valid_denom = denom > 0
+        per_class_f1[valid_denom] = (2.0 * tp_counts[valid_denom]) / denom[valid_denom]
+        macro_f1 = float(np.mean(per_class_f1))
+        total_sup = int(np.sum(support_counts))
+        weighted_f1 = float(np.sum(per_class_f1 * support_counts) / total_sup) if total_sup > 0 else 0.0
 
         return {
             "val_loss": float(running_loss / total_samples),
@@ -457,7 +471,7 @@ class ControlledTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found at '{path}'")
 
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location="cpu")
         if not isinstance(checkpoint, dict):
             raise ValueError(f"Invalid checkpoint format in '{path}': expected dict, got {type(checkpoint)}")
 

@@ -11,6 +11,7 @@ Scientific and engineering invariants (AD-005, AD-006):
 from __future__ import annotations
 
 import dataclasses
+import gc
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ import torch
 import yaml
 
 from viral_cnn.models.registry import REGISTERED_VARIANTS
+from viral_cnn.utils.logging_utils import log_artifact_path
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +187,11 @@ def setup_notebook_runtime(
     """
     seed_everything(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
     remote_mode = is_remote_server()
 
     # Detect repository project_root by walking up
@@ -369,4 +376,151 @@ def write_notebook_manifest(
             yaml.dump(data, f, default_flow_style=False)
 
     return manifest
+
+
+def resolve_split_files(
+    base_dir: Union[str, Path, Sequence[Union[str, Path]]],
+    split_name: str = "test",
+) -> List[str]:
+    """
+    Resolves Parquet partition files for a specific dataset split ('train', 'val'/'validation', 'test').
+    Prevents accidental merging of train + validation + test subdirectories via rglob.
+    """
+    if not isinstance(base_dir, (str, Path)):
+        return [str(p) for p in base_dir]
+
+    base = Path(base_dir)
+    if base.is_file():
+        return [str(base)]
+
+    split_key = split_name.strip().lower()
+    if split_key in ("val", "validation", "valid"):
+        candidates = ["validation", "val", "valid"]
+    else:
+        candidates = [split_key]
+
+    # 1. Check split subdirectories (e.g. base/test/*.parquet, base/validation/*.parquet)
+    for cand in candidates:
+        sub = base / cand
+        if sub.is_dir():
+            files = sorted(sub.glob("*.parquet"))
+            if not files:
+                files = sorted(sub.rglob("*.parquet"))
+            if files:
+                return [str(f) for f in files]
+
+    # 2. Check direct split files (e.g. base/test.parquet, base/val.parquet)
+    for cand in candidates:
+        f_cand = base / f"{cand}.parquet"
+        if f_cand.exists():
+            return [str(f_cand)]
+
+    # 3. Check glob matching split name in base directory
+    for cand in candidates:
+        matched = sorted(base.glob(f"*{cand}*.parquet"))
+        if matched:
+            return [str(f) for f in matched]
+
+    # 4. Fallback: direct *.parquet files in base (without descending into unrelated split dirs)
+    direct = sorted(base.glob("*.parquet"))
+    if direct:
+        return [str(f) for f in direct]
+
+    return [str(base)]
+
+
+def read_parquet_sample(
+    path_or_files: Union[str, Path, Sequence[Union[str, Path]]],
+    columns: Optional[List[str]] = None,
+    max_rows: int = 1000,
+    split: str = "test",
+) -> pd.DataFrame:
+    """
+    Streams up to `max_rows` rows from a Parquet file, split directory, or list of Parquet files
+    using PyArrow batch iteration without loading multi-gigabyte partitions into RAM.
+    """
+    files = resolve_split_files(path_or_files, split_name=split)
+    log_artifact_path(
+        "ParquetSample",
+        files,
+        extra=f"split={split}, max_rows={max_rows}",
+    )
+
+    chunks: List[pd.DataFrame] = []
+    collected = 0
+    batch_sz = max(1, min(max_rows, 8192))
+
+    for fp in files:
+        p = Path(fp)
+        if not p.exists() or p.is_dir():
+            continue
+        pf = pq.ParquetFile(p)
+        schema_names = pf.schema_arrow.names
+        valid_cols = None
+        if columns is not None:
+            valid_cols = [c for c in columns if c in schema_names]
+            if not valid_cols:
+                valid_cols = None
+
+        for batch in pf.iter_batches(batch_size=batch_sz, columns=valid_cols):
+            df_batch = batch.to_pandas()
+            chunks.append(df_batch)
+            collected += len(df_batch)
+            if collected >= max_rows:
+                break
+        if collected >= max_rows:
+            break
+
+    if not chunks:
+        return pd.DataFrame()
+    out_df = pd.concat(chunks, ignore_index=True)
+    if len(out_df) > max_rows:
+        out_df = out_df.iloc[:max_rows].copy()
+    return out_df
+
+
+def create_optimized_dataloader(
+    dataset: Any,
+    is_smoke_test: bool = False,
+    device: Optional[Union[str, torch.device]] = None,
+    num_workers: Optional[int] = None,
+) -> torch.utils.data.DataLoader:
+    """
+    Builds a PyTorch DataLoader for pre-batched IterableDatasets (`batch_size=None`)
+    tuned to maximize GPU and CPU pipeline throughput without exhausting system RAM.
+    """
+    use_cuda = (
+        str(device).startswith("cuda")
+        if device is not None
+        else torch.cuda.is_available()
+    )
+    num_files = len(getattr(dataset, "file_paths", []))
+
+    if num_workers is not None:
+        workers = max(0, int(num_workers))
+    elif is_smoke_test or not use_cuda or num_files <= 1:
+        workers = 0
+    else:
+        cpu_cnt = os.cpu_count() or 4
+        workers = min(4, max(1, cpu_cnt // 2), num_files)
+
+    kwargs: Dict[str, Any] = {
+        "batch_size": None,
+        "num_workers": workers,
+        "pin_memory": bool(use_cuda and not is_smoke_test),
+    }
+    if workers > 0:
+        kwargs["prefetch_factor"] = 2
+        kwargs["persistent_workers"] = False
+
+    return torch.utils.data.DataLoader(dataset, **kwargs)
+
+
+def free_gpu_memory(*objs: Any) -> None:
+    """Releases Python references, triggers garbage collection, and clears PyTorch CUDA cache."""
+    del objs
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 

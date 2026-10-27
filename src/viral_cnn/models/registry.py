@@ -315,11 +315,15 @@ def build_registered_model(
             model=model,
             checkpoint=checkpoint_path,
             expected_classes=spec.num_classes,
-            map_location=device,
+            map_location="cpu",
         )
     else:
         log_artifact_path("model", f"{variant_name} (uninitialized random weights, no checkpoint)")
 
     model.to(device)
     return model
+
+
+load_registered_model = build_registered_model
+
 

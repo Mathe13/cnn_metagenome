@@ -66,6 +66,8 @@ def compute_classification_metrics(
     y_top5: Optional[Union[np.ndarray, torch.Tensor, List[List[int]]]] = None,
     logits: Optional[Union[np.ndarray, torch.Tensor]] = None,
     num_classes: Optional[int] = None,
+    precomputed_loss: Optional[float] = None,
+    precomputed_top5_accuracy: Optional[float] = None,
 ) -> ClassificationMetrics:
     """
     Computes Top-1 accuracy, Top-5 accuracy, cross-entropy loss, Macro-F1, and Weighted-F1.
@@ -101,7 +103,9 @@ def compute_classification_metrics(
 
     # Top-5 Accuracy (%)
     top5_acc: Optional[float] = None
-    if y_top5 is not None:
+    if precomputed_top5_accuracy is not None:
+        top5_acc = float(precomputed_top5_accuracy)
+    elif y_top5 is not None:
         if isinstance(y_top5, torch.Tensor):
             y_top5_np = y_top5.detach().cpu().numpy()
         else:
@@ -116,7 +120,9 @@ def compute_classification_metrics(
 
     # Cross-Entropy Loss
     loss_val: Optional[float] = None
-    if logits is not None:
+    if precomputed_loss is not None:
+        loss_val = float(precomputed_loss)
+    elif logits is not None:
         if isinstance(logits, np.ndarray):
             logits_tensor = torch.tensor(logits, dtype=torch.float32)
         else:
@@ -190,7 +196,7 @@ def compute_species_f1_bands(
         num_classes=num_classes,
     )
 
-    # Optional per-class average confidence
+    # Optional per-class average confidence (vectorized via bincount)
     class_mean_conf: Optional[np.ndarray] = None
     if confidences is not None:
         confs_np = np.asarray(confidences, dtype=np.float64)
@@ -199,14 +205,13 @@ def compute_species_f1_bands(
                 f"Length mismatch: confidences has {len(confs_np)} samples but y_true has {len(y_true_np)}"
             )
         class_mean_conf = np.zeros(num_classes, dtype=np.float64)
-        sample_counts = np.bincount(
-            y_true_np[(y_true_np >= 0) & (y_true_np < num_classes)],
-            minlength=num_classes,
-        )[:num_classes]
-        for c in range(num_classes):
-            mask_c = (y_true_np == c)
-            if mask_c.any():
-                class_mean_conf[c] = float(np.mean(confs_np[mask_c]))
+        valid_mask = (y_true_np >= 0) & (y_true_np < num_classes)
+        valid_y = y_true_np[valid_mask]
+        valid_c = confs_np[valid_mask]
+        sample_counts = np.bincount(valid_y, minlength=num_classes)[:num_classes]
+        conf_sums = np.bincount(valid_y, weights=valid_c, minlength=num_classes)[:num_classes]
+        nonzero = sample_counts > 0
+        class_mean_conf[nonzero] = conf_sums[nonzero] / sample_counts[nonzero]
 
     bands: Dict[str, Dict[str, Any]] = {}
     band_keys: List[str] = []
@@ -321,9 +326,28 @@ def compute_species_specialist_comparison(
     f1_res, _, _ = compute_f1_scores(y_true_np, p_res, total_classes)
     f1_conv, _, _ = compute_f1_scores(y_true_np, p_conv, total_classes)
 
-    # Unique evaluated species present in y_true
-    unique_species = np.unique(y_true_np[(y_true_np >= 0) & (y_true_np < total_classes)])
-    unique_species.sort()
+    # Vectorized per-species aggregations in O(N)
+    valid_mask = (y_true_np >= 0) & (y_true_np < total_classes)
+    valid_y = y_true_np[valid_mask]
+    sp_counts = np.bincount(valid_y, minlength=total_classes)[:total_classes]
+
+    res_match = valid_mask & (p_res == y_true_np)
+    conv_match = valid_mask & (p_conv == y_true_np)
+    res_correct_counts = np.bincount(y_true_np[res_match], minlength=total_classes)[:total_classes]
+    conv_correct_counts = np.bincount(y_true_np[conv_match], minlength=total_classes)[:total_classes]
+
+    res_conf_sums = (
+        np.bincount(valid_y, weights=c_res[valid_mask], minlength=total_classes)[:total_classes]
+        if c_res is not None
+        else None
+    )
+    conv_conf_sums = (
+        np.bincount(valid_y, weights=c_conv[valid_mask], minlength=total_classes)[:total_classes]
+        if c_conv is not None
+        else None
+    )
+
+    unique_species = np.flatnonzero(sp_counts > 0)
 
     convnext_wins = 0
     resnet_wins = 0
@@ -332,20 +356,20 @@ def compute_species_specialist_comparison(
 
     per_species_list: List[Dict[str, Any]] = []
 
-    for sp_id in unique_species:
-        mask = (y_true_np == sp_id)
-        n_sp = int(mask.sum())
+    for sp_id_raw in unique_species:
+        sp_id = int(sp_id_raw)
+        n_sp = int(sp_counts[sp_id])
         if n_sp == 0:
             continue
 
-        acertos_res = int((p_res[mask] == sp_id).sum())
-        acertos_conv = int((p_conv[mask] == sp_id).sum())
+        acertos_res = int(res_correct_counts[sp_id])
+        acertos_conv = int(conv_correct_counts[sp_id])
 
         acc_res = float(acertos_res / n_sp)
         acc_conv = float(acertos_conv / n_sp)
 
-        conf_res = float(np.mean(c_res[mask])) if c_res is not None else None
-        conf_conv = float(np.mean(c_conv[mask])) if c_conv is not None else None
+        conf_res = float(res_conf_sums[sp_id] / n_sp) if res_conf_sums is not None else None
+        conf_conv = float(conv_conf_sums[sp_id] / n_sp) if conv_conf_sums is not None else None
 
         if acertos_conv > acertos_res:
             winner = "convnext_superior"

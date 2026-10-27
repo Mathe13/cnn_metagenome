@@ -444,14 +444,18 @@ def audit_model_calibration_by_noise(
     """
     Evaluates probabilistic calibration (ECE, MCE, NLL, Brier score, accuracy, confidence)
     across multiple 1D-CNN model variants and controlled nucleotide noise levels.
+    Streams batch-level sufficient statistics on device to avoid allocating (N, C) probability matrices in RAM.
     """
+    dev = torch.device(device) if isinstance(device, str) else device
+    amp_enabled = dev.type == "cuda"
     total_classes = num_classes if num_classes is not None else (max(labels) + 1)
     tokens_tensor = torch.tensor(
         [encode_sequence_tokens(s, max_len=512) for s in sequences],
         dtype=torch.long,
     )
-    labels_tensor = torch.tensor(labels, dtype=torch.long)
+    y_np = np.asarray(labels, dtype=np.int64)
     n_samples = len(sequences)
+    eps = 1e-15
 
     audit_report: Dict[str, Any] = {
         "n_samples": n_samples,
@@ -463,18 +467,23 @@ def audit_model_calibration_by_noise(
 
     for model_name, model in models_dict.items():
         model.eval()
-        model.to(device)
+        model.to(dev)
         audit_report["models"][model_name] = {}
 
         for rate in noise_rates:
             rate_key = f"noise_{rate}"
             gen = torch.Generator(device="cpu").manual_seed(seed)
 
-            all_probs_list = []
+            top1_preds_chunks: List[np.ndarray] = []
+            top1_confs_chunks: List[np.ndarray] = []
+            p_true_chunks: List[np.ndarray] = []
+            sum_p_sq_chunks: List[np.ndarray] = []
+
             with torch.no_grad():
                 for start_idx in range(0, n_samples, batch_size):
                     end_idx = min(start_idx + batch_size, n_samples)
                     batch_tokens = tokens_tensor[start_idx:end_idx]
+                    batch_y_np = y_np[start_idx:end_idx]
 
                     if rate > 0.0:
                         batch_tokens = inject_noise(
@@ -483,16 +492,77 @@ def audit_model_calibration_by_noise(
                             generator=gen,
                         )
 
-                    batch_tokens = batch_tokens.to(device)
-                    logits = model(batch_tokens)
-                    probs = F.softmax(logits, dim=-1)
-                    all_probs_list.append(probs.cpu().numpy())
+                    batch_tokens = batch_tokens.to(dev)
+                    with torch.amp.autocast("cuda", enabled=amp_enabled):
+                        logits = model(batch_tokens)
+                    probs = F.softmax(logits.float(), dim=-1)
 
-            model_probs = np.concatenate(all_probs_list, axis=0)
-            metrics = compute_calibration_metrics(
-                probs=model_probs,
-                y_true=labels,
+                    b_confs, b_preds = torch.max(probs, dim=-1)
+                    b_sum_sq = torch.sum(probs * probs, dim=-1)
+
+                    b_y_dev = torch.as_tensor(batch_y_np, dtype=torch.long, device=dev)
+                    valid_m = (b_y_dev >= 0) & (b_y_dev < probs.shape[-1])
+                    b_p_true = torch.zeros(len(batch_y_np), dtype=torch.float32, device=dev)
+                    if valid_m.any():
+                        idx_valid = torch.nonzero(valid_m, as_tuple=False).squeeze(1)
+                        b_p_true[idx_valid] = probs[idx_valid, b_y_dev[idx_valid]]
+
+                    top1_preds_chunks.append(b_preds.cpu().numpy().astype(np.int64))
+                    top1_confs_chunks.append(b_confs.cpu().numpy().astype(np.float64))
+                    p_true_chunks.append(b_p_true.cpu().numpy().astype(np.float64))
+                    sum_p_sq_chunks.append(b_sum_sq.cpu().numpy().astype(np.float64))
+
+            top1_preds = np.concatenate(top1_preds_chunks, axis=0)
+            top1_confs = np.concatenate(top1_confs_chunks, axis=0)
+            p_true = np.concatenate(p_true_chunks, axis=0)
+            sum_p_sq = np.concatenate(sum_p_sq_chunks, axis=0)
+
+            is_correct = (top1_preds == y_np)
+            top1_acc = float(np.mean(is_correct) * 100.0)
+            top1_conf = float(np.mean(top1_confs))
+
+            conf_on_correct = float(np.mean(top1_confs[is_correct])) if np.any(is_correct) else 0.0
+            conf_on_incorrect = float(np.mean(top1_confs[~is_correct])) if np.any(~is_correct) else 0.0
+            overconfidence_gap = float(top1_conf - (top1_acc / 100.0))
+            is_overconfident = overconfidence_gap > 0.10
+
+            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_indices = np.clip(np.digitize(top1_confs, bin_edges) - 1, 0, n_bins - 1)
+            ece = 0.0
+            mce = 0.0
+            sum_weights = 0.0
+            for b_idx in range(n_bins):
+                mask = (bin_indices == b_idx)
+                bin_count = int(np.sum(mask))
+                weight = float(bin_count / n_samples)
+                sum_weights += round(weight, 6)
+                if bin_count > 0:
+                    bin_conf = float(np.mean(top1_confs[mask]))
+                    bin_acc = float(np.mean(is_correct[mask]))
+                    cal_gap = round(float(abs(bin_acc - bin_conf)), 6)
+                    ece += (bin_count / n_samples) * cal_gap
+                    if cal_gap > mce:
+                        mce = cal_gap
+
+            p_true_clamped = np.clip(p_true, eps, 1.0)
+            nll = float(-np.mean(np.log(p_true_clamped)))
+            brier_score = float(np.mean(sum_p_sq - 2.0 * p_true + 1.0))
+
+            metrics = CalibrationMetrics(
+                top1_accuracy=round(top1_acc, 4),
+                top1_confidence=round(top1_conf, 6),
+                ece=round(ece, 6),
+                mce=round(mce, 6),
+                nll=round(nll, 6),
+                brier_score=round(brier_score, 6),
+                n_samples=n_samples,
                 n_bins=n_bins,
+                binning_strategy="equal_width",
+                sum_bin_weights=round(sum_weights, 6),
+                conf_on_correct=round(conf_on_correct, 6),
+                conf_on_incorrect=round(conf_on_incorrect, 6),
+                overconfidence_gap=round(overconfidence_gap, 6),
+                is_overconfident_regime=is_overconfident,
             )
             audit_report["models"][model_name][rate_key] = metrics.to_dict()
 
@@ -623,8 +693,10 @@ class TaxonomyEntropyAnalyzer:
             dev_inputs = dev_inputs.squeeze(0)
 
         with torch.inference_mode():
-            logits = self.model(dev_inputs)
-            species_probs = F.softmax(logits, dim=-1)
+            amp_enabled = self.device.type == "cuda"
+            with torch.amp.autocast("cuda", enabled=amp_enabled):
+                logits = self.model(dev_inputs)
+            species_probs = F.softmax(logits.float(), dim=-1)
             h_species = self.calculate_entropy(species_probs)
 
             genus_probs = self.get_genus_probs(species_probs)
