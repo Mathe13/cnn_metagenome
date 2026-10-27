@@ -360,9 +360,15 @@ def evaluate_dataloader(
     pred_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
     conf_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
     top5_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
-    loss_sums: Dict[float, float] = {r: 0.0 for r in rates_to_run}
-    loss_counts: Dict[float, int] = {r: 0 for r in rates_to_run}
-    top5_correct_counts: Dict[float, int] = {r: 0 for r in rates_to_run}
+    loss_sums_t: Dict[float, torch.Tensor] = {
+        r: torch.zeros((), dtype=torch.float64, device=dev) for r in rates_to_run
+    }
+    loss_counts_t: Dict[float, torch.Tensor] = {
+        r: torch.zeros((), dtype=torch.int64, device=dev) for r in rates_to_run
+    }
+    top5_correct_counts_t: Dict[float, torch.Tensor] = {
+        r: torch.zeros((), dtype=torch.int64, device=dev) for r in rates_to_run
+    }
 
     orig_tokens_sample: Dict[float, List[torch.Tensor]] = {r: [] for r in rates_to_run}
     noisy_tokens_sample: Dict[float, List[torch.Tensor]] = {r: [] for r in rates_to_run}
@@ -408,31 +414,28 @@ def evaluate_dataloader(
                         orig_tokens_sample[r].append(inputs_cpu.clone())
                         noisy_tokens_sample[r].append(noisy_in.clone())
                         sampled_rows[r] += batch_rows
+                    inputs_dev = noisy_in.to(dev, non_blocking=(dev.type == "cuda"))
                 else:
-                    noisy_in = inputs_cpu
+                    inputs_dev = inputs.to(dev, non_blocking=(dev.type == "cuda"))
 
-                inputs_dev = noisy_in.to(dev, non_blocking=(dev.type == "cuda"))
                 with torch.amp.autocast("cuda", enabled=amp_enabled):
                     logits = model(inputs_dev)
                 logits_fp32 = logits.float()
 
                 valid_mask = (labels_dev >= 0) & (labels_dev < logits_fp32.shape[-1])
-                if valid_mask.any():
-                    loss_sums[r] += float(
-                        F.cross_entropy(
-                            logits_fp32[valid_mask],
-                            labels_dev[valid_mask],
-                            reduction="sum",
-                        ).item()
-                    )
-                    loss_counts[r] += int(valid_mask.sum().item())
+                loss_sums_t[r] += F.cross_entropy(
+                    logits_fp32,
+                    torch.where(valid_mask, labels_dev, torch.zeros_like(labels_dev)),
+                    reduction="none",
+                ).masked_fill(~valid_mask, 0.0).sum().to(torch.float64)
+                loss_counts_t[r] += valid_mask.sum()
 
                 probs = F.softmax(logits_fp32, dim=-1)
                 k = min(5, logits_fp32.shape[-1])
                 topk_probs, topk_indices = torch.topk(probs, k=k, dim=-1)
 
                 top5_matches = (topk_indices == labels_dev.unsqueeze(1)).any(dim=1)
-                top5_correct_counts[r] += int(top5_matches.sum().item())
+                top5_correct_counts_t[r] += top5_matches.sum()
 
                 pred_chunks[r].append(topk_indices[:, 0].cpu().numpy().astype(np.int32))
                 conf_chunks[r].append(topk_probs[:, 0].cpu().numpy().astype(np.float32))
@@ -445,6 +448,12 @@ def evaluate_dataloader(
 
     if not label_chunks or total_seen == 0:
         raise ValueError("Dataloader produced zero samples.")
+
+    loss_sums: Dict[float, float] = {r: float(loss_sums_t[r].item()) for r in rates_to_run}
+    loss_counts: Dict[float, int] = {r: int(loss_counts_t[r].item()) for r in rates_to_run}
+    top5_correct_counts: Dict[float, int] = {
+        r: int(top5_correct_counts_t[r].item()) for r in rates_to_run
+    }
 
     y_true_arr = np.concatenate(label_chunks, axis=0)
     total_classes = (

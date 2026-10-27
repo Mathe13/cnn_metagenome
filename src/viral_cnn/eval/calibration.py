@@ -638,7 +638,7 @@ class TaxonomyEntropyAnalyzer:
 
     def calculate_entropy(self, probs: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
         """Calculates Shannon entropy in nats along the last dimension."""
-        safe_probs = torch.clamp(probs, min=eps)
+        safe_probs = torch.clamp(probs.float(), min=eps)
         entropy = -(safe_probs * torch.log(safe_probs)).sum(dim=-1)
         return entropy
 
@@ -651,8 +651,9 @@ class TaxonomyEntropyAnalyzer:
         """
         Calculates energy-normalized entropy of latent representations before fc.
         When normalize=True, scales by ln(D) to bound values within [0.0, 1.0].
+        Casts activations to float32 to prevent FP16 sum overflow (>65504) and eps underflow.
         """
-        z = activations.flatten(1)
+        z = activations.flatten(1).float()
         energy = torch.abs(z)
         denom = energy.sum(dim=1, keepdim=True) + eps
         probs = energy / denom

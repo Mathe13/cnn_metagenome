@@ -502,7 +502,7 @@ def create_optimized_dataloader(
         workers = 0
     else:
         cpu_cnt = os.cpu_count() or 4
-        workers = min(4, max(1, cpu_cnt // 2), num_files)
+        workers = min(8, max(1, cpu_cnt // 2), num_files)
 
     kwargs: Dict[str, Any] = {
         "batch_size": None,
@@ -511,7 +511,7 @@ def create_optimized_dataloader(
     }
     if workers > 0:
         kwargs["prefetch_factor"] = 2
-        kwargs["persistent_workers"] = False
+        kwargs["persistent_workers"] = True
 
     return torch.utils.data.DataLoader(dataset, **kwargs)
 

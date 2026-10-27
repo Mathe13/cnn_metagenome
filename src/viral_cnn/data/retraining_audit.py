@@ -209,6 +209,29 @@ def audit_retraining_need(
             db.commit()
             unique_train = db.execute("SELECT count(*) FROM hashes").fetchone()[0]
 
+            test_chunk: list[tuple[str | None, str, bool]] = []
+
+            def _flush_test_chunk(chunk: list[tuple[str | None, str, bool]]) -> None:
+                nonlocal n_match, n_match_compatible
+                candidate_digests = list({d for d, _, _ in chunk if d is not None})
+                matched_digests: set[str] = set()
+                for i in range(0, len(candidate_digests), 900):
+                    sub = candidate_digests[i : i + 900]
+                    placeholders = ",".join("?" for _ in sub)
+                    rows = db.execute(
+                        f"SELECT hash FROM hashes WHERE hash IN ({placeholders})",
+                        sub,
+                    ).fetchall()
+                    matched_digests.update(r[0] for r in rows)
+                for digest, sp, comp in chunk:
+                    if digest is not None and digest in matched_digests:
+                        n_match += 1
+                        per_species[sp]["exact_matches"] += 1
+                        if comp:
+                            n_match_compatible += 1
+                            per_species[sp]["benchmark_compatible_exact_matches"] += 1
+                chunk.clear()
+
             for raw in _iter_rows(test_files, test_cols):
                 if max_test_rows is not None and n_test >= max_test_rows:
                     break
@@ -221,12 +244,9 @@ def audit_retraining_need(
                 if compatible:
                     per_species[species]["benchmark_compatible_test_rows"] += 1
                 digest = _canonical_hash(seq) if hashable else None
-                if digest is not None and db.execute("SELECT 1 FROM hashes WHERE hash=?", (digest,)).fetchone():
-                    n_match += 1
-                    per_species[species]["exact_matches"] += 1
-                    if compatible:
-                        n_match_compatible += 1
-                        per_species[species]["benchmark_compatible_exact_matches"] += 1
+                test_chunk.append((digest, species, compatible))
+                if len(test_chunk) >= 5000:
+                    _flush_test_chunk(test_chunk)
                 if test_cols[2]:
                     if genome is None:
                         missing_test_groups += 1
@@ -238,6 +258,8 @@ def audit_retraining_need(
                         if genome not in train_species_genomes.get(species, set()) and species in train_species:
                             unseen_test_rows += 1
                             per_species[species]["unseen_genome_rows"] += 1
+            if test_chunk:
+                _flush_test_chunk(test_chunk)
         finally:
             db.close()
 

@@ -181,6 +181,7 @@ def get_confused_class_samples(
     test_loader: DataLoader,
     device: torch.device,
     n_examples_per_class: int = 5,
+    max_batches: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Collects up to n_examples_per_class input tensors for each unique true_id in confused pairs.
@@ -198,24 +199,44 @@ def get_confused_class_samples(
                 "score": score,
             }
 
+    if not target_classes_map:
+        return []
+
     counts = {cid: 0 for cid in target_classes_map}
-    all_targets_met = False
+    target_ids_tensor = torch.tensor(list(target_classes_map.keys()), dtype=torch.long)
+    batch_idx = 0
 
     with torch.no_grad():
         for inputs, labels in test_loader:
-            if all_targets_met:
+            if max_batches is not None and batch_idx >= max_batches:
                 break
-            inputs_cpu = inputs.cpu()
-            labels_cpu = labels.cpu()
+            batch_idx += 1
 
-            for idx in range(inputs_cpu.size(0)):
+            inputs_cpu = inputs.cpu()
+            labels_cpu = labels.cpu().long()
+            if inputs_cpu.dim() == 3 and inputs_cpu.shape[0] == 1:
+                inputs_cpu = inputs_cpu.squeeze(0)
+            if labels_cpu.dim() == 2 and labels_cpu.shape[0] == 1:
+                labels_cpu = labels_cpu.squeeze(0)
+
+            match_mask = torch.isin(labels_cpu, target_ids_tensor)
+            if not match_mask.any():
+                continue
+
+            matched_indices = torch.nonzero(match_mask, as_tuple=False).squeeze(1).tolist()
+            if isinstance(matched_indices, int):
+                matched_indices = [matched_indices]
+
+            for idx in matched_indices:
                 true_lbl = int(labels_cpu[idx].item())
-                if true_lbl in target_classes_map and counts[true_lbl] < n_examples_per_class:
+                if counts[true_lbl] < n_examples_per_class:
                     target_classes_map[true_lbl]["examples"].append(inputs_cpu[idx])
                     counts[true_lbl] += 1
-                    if all(c >= n_examples_per_class for c in counts.values()):
-                        all_targets_met = True
-                        break
+
+            remaining_ids = [cid for cid, c in counts.items() if c < n_examples_per_class]
+            if not remaining_ids:
+                break
+            target_ids_tensor = torch.tensor(remaining_ids, dtype=torch.long)
 
     final_output: List[Dict[str, Any]] = []
     for cid, data in target_classes_map.items():

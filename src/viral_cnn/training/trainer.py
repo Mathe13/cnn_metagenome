@@ -121,7 +121,7 @@ class ControlledTrainer:
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = lr
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
 
         with self.profiler.profile_step(batch_size=batch_x.size(0)):
             # Forward pass under autocast
@@ -175,35 +175,44 @@ class ControlledTrainer:
         self.model.train()
         self._apply_bn_eval()
 
-        running_loss = 0.0
+        running_loss_t = torch.zeros((), dtype=torch.float64, device=self.device)
         total_samples = 0
-        correct_top1 = 0
+        correct_top1_t = torch.zeros((), dtype=torch.int64, device=self.device)
 
         num_c = int(self.config.num_classes)
-        support_counts = np.zeros(num_c, dtype=np.int64)
-        pred_counts = np.zeros(num_c, dtype=np.int64)
-        tp_counts = np.zeros(num_c, dtype=np.int64)
+        support_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
+        pred_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
+        tp_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
 
         batch_count = 0
+        non_blocking = self.device.type == "cuda"
         autocast_device = "cuda" if self.device.type == "cuda" and torch.cuda.is_available() else "cpu"
+        gen_on_cpu = generator is not None and generator.device.type != self.device.type
 
         for batch_x, batch_y in train_loader:
             if max_batches is not None and batch_count >= max_batches:
                 break
 
-            # Apply noise perturbation if configured
-            if self.config.noise_rate > 0.0:
+            if self.config.noise_rate > 0.0 and gen_on_cpu:
                 batch_x = inject_noise(
                     batch_x,
                     noise_rate=self.config.noise_rate,
                     generator=generator,
                 )
 
-            batch_x = batch_x.to(self.device, non_blocking=(self.device.type == "cuda"))
-            batch_y = batch_y.to(self.device, non_blocking=(self.device.type == "cuda"))
-            b_size = batch_x.size(0)
+            batch_x = batch_x.to(self.device, non_blocking=non_blocking)
+            batch_y = batch_y.to(self.device, non_blocking=non_blocking)
 
-            self.optimizer.zero_grad()
+            if self.config.noise_rate > 0.0 and not gen_on_cpu:
+                batch_x = inject_noise(
+                    batch_x,
+                    noise_rate=self.config.noise_rate,
+                    generator=generator,
+                )
+
+            b_size = int(batch_x.size(0))
+
+            self.optimizer.zero_grad(set_to_none=True)
 
             with torch.autocast(device_type=autocast_device, enabled=self.use_amp):
                 logits = self.model(batch_x)
@@ -229,20 +238,21 @@ class ControlledTrainer:
             if scheduler is not None:
                 scheduler.step()
 
-            running_loss += float(loss.item()) * b_size
-            total_samples += b_size
+            with torch.no_grad():
+                running_loss_t += loss.detach().to(torch.float64) * b_size
+                total_samples += b_size
 
-            preds = torch.argmax(logits, dim=1)
-            correct_top1 += int((preds == batch_y).sum().item())
+                preds = torch.argmax(logits.detach(), dim=1)
+                correct_top1_t += (preds == batch_y).sum()
 
-            y_pred_b = preds.detach().cpu().numpy().astype(np.int64)
-            y_true_b = batch_y.detach().cpu().numpy().astype(np.int64)
-            valid_t = (y_true_b >= 0) & (y_true_b < num_c)
-            valid_p = (y_pred_b >= 0) & (y_pred_b < num_c)
-            support_counts += np.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
-            pred_counts += np.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
-            match_m = (y_true_b == y_pred_b) & valid_t
-            tp_counts += np.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
+                y_true_b = batch_y.long()
+                y_pred_b = preds.long()
+                valid_t = (y_true_b >= 0) & (y_true_b < num_c)
+                valid_p = (y_pred_b >= 0) & (y_pred_b < num_c)
+                support_counts_t += torch.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
+                pred_counts_t += torch.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
+                match_m = (y_true_b == y_pred_b) & valid_t
+                tp_counts_t += torch.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
 
             batch_count += 1
             self.current_step += 1
@@ -256,6 +266,12 @@ class ControlledTrainer:
                 "total_samples": 0,
                 "learning_rate": self.get_current_lr(),
             }
+
+        running_loss = float(running_loss_t.item())
+        correct_top1 = int(correct_top1_t.item())
+        support_counts = support_counts_t.cpu().numpy()
+        pred_counts = pred_counts_t.cpu().numpy()
+        tp_counts = tp_counts_t.cpu().numpy()
 
         denom = pred_counts + support_counts
         per_class_f1 = np.zeros(num_c, dtype=np.float64)
@@ -284,61 +300,71 @@ class ControlledTrainer:
         Evaluates model over validation dataloader with optional noise corruption.
         """
         self.model.eval()
-        running_loss = 0.0
+        running_loss_t = torch.zeros((), dtype=torch.float64, device=self.device)
         total_samples = 0
-        correct_top1 = 0
-        correct_top5 = 0
+        correct_top1_t = torch.zeros((), dtype=torch.int64, device=self.device)
+        correct_top5_t = torch.zeros((), dtype=torch.int64, device=self.device)
 
         num_c = int(self.config.num_classes)
-        support_counts = np.zeros(num_c, dtype=np.int64)
-        pred_counts = np.zeros(num_c, dtype=np.int64)
-        tp_counts = np.zeros(num_c, dtype=np.int64)
+        support_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
+        pred_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
+        tp_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
 
         batch_count = 0
+        non_blocking = self.device.type == "cuda"
         autocast_device = "cuda" if self.device.type == "cuda" and torch.cuda.is_available() else "cpu"
+        gen_on_cpu = generator is not None and generator.device.type != self.device.type
 
         with torch.no_grad():
             for batch_x, batch_y in val_loader:
                 if max_batches is not None and batch_count >= max_batches:
                     break
 
-                if self.config.noise_rate > 0.0:
+                if self.config.noise_rate > 0.0 and gen_on_cpu:
                     batch_x = inject_noise(
                         batch_x,
                         noise_rate=self.config.noise_rate,
                         generator=generator,
                     )
 
-                batch_x = batch_x.to(self.device, non_blocking=(self.device.type == "cuda"))
-                batch_y = batch_y.to(self.device, non_blocking=(self.device.type == "cuda"))
-                b_size = batch_x.size(0)
+                batch_x = batch_x.to(self.device, non_blocking=non_blocking)
+                batch_y = batch_y.to(self.device, non_blocking=non_blocking)
+
+                if self.config.noise_rate > 0.0 and not gen_on_cpu:
+                    batch_x = inject_noise(
+                        batch_x,
+                        noise_rate=self.config.noise_rate,
+                        generator=generator,
+                    )
+
+                b_size = int(batch_x.size(0))
 
                 with torch.autocast(device_type=autocast_device, enabled=self.use_amp):
                     logits = self.model(batch_x)
                     loss = self.criterion(logits, batch_y)
 
-                running_loss += float(loss.item()) * b_size
+                running_loss_t += loss.detach().to(torch.float64) * b_size
                 total_samples += b_size
 
                 preds = torch.argmax(logits, dim=1)
-                correct_top1 += int((preds == batch_y).sum().item())
+                correct_top1_t += (preds == batch_y).sum()
 
                 k = min(5, logits.size(1))
                 if k > 1:
                     _, top5_indices = torch.topk(logits, k, dim=1)
                     target_expanded = batch_y.unsqueeze(1).expand_as(top5_indices)
-                    correct_top5 += int((top5_indices == target_expanded).any(dim=1).sum().item())
+                    correct_top5_t += (top5_indices == target_expanded).any(dim=1).sum()
                 else:
-                    correct_top5 = correct_top1
+                    correct_top5_t = correct_top1_t.clone()
 
-                y_pred_b = preds.cpu().numpy().astype(np.int64)
-                y_true_b = batch_y.cpu().numpy().astype(np.int64)
+                y_true_b = batch_y.long()
+                y_pred_b = preds.long()
                 valid_t = (y_true_b >= 0) & (y_true_b < num_c)
                 valid_p = (y_pred_b >= 0) & (y_pred_b < num_c)
-                support_counts += np.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
-                pred_counts += np.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
+                support_counts_t += torch.bincount(y_true_b[valid_t], minlength=num_c)[:num_c]
+                pred_counts_t += torch.bincount(y_pred_b[valid_p], minlength=num_c)[:num_c]
                 match_m = (y_true_b == y_pred_b) & valid_t
-                tp_counts += np.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
+                tp_counts_t += torch.bincount(y_true_b[match_m], minlength=num_c)[:num_c]
                 batch_count += 1
 
         if total_samples == 0:
@@ -350,6 +376,13 @@ class ControlledTrainer:
                 "val_f1_weighted": 0.0,
                 "total_samples": 0,
             }
+
+        running_loss = float(running_loss_t.item())
+        correct_top1 = int(correct_top1_t.item())
+        correct_top5 = int(correct_top5_t.item())
+        support_counts = support_counts_t.cpu().numpy()
+        pred_counts = pred_counts_t.cpu().numpy()
+        tp_counts = tp_counts_t.cpu().numpy()
 
         denom = pred_counts + support_counts
         per_class_f1 = np.zeros(num_c, dtype=np.float64)

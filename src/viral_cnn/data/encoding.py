@@ -52,9 +52,11 @@ class OneHotEmbedding(nn.Module):
         self.num_features = num_features
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_clean = x.clone()
-        x_clean[x_clean >= self.num_features] = self.num_features
-        x_clean[x_clean < 0] = self.num_features
+        x_clean = torch.clamp(
+            torch.where(x < 0, self.num_features, x),
+            min=0,
+            max=self.num_features,
+        )
 
         one_hot = F.one_hot(x_clean.long(), num_classes=self.num_features + 1).float()
         one_hot = one_hot[:, :, : self.num_features]
