@@ -569,6 +569,256 @@ def audit_model_calibration_by_noise(
     return audit_report
 
 
+def audit_dataloader_calibration_by_noise(
+    models_dict: Dict[str, torch.nn.Module],
+    test_loader: Any,
+    val_loader: Optional[Any] = None,
+    noise_rates: List[float] = [0.0, 0.02, 0.05, 0.10, 0.15],
+    device: Union[str, torch.device] = "cpu",
+    n_bins: int = 15,
+    max_batches: Optional[int] = None,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """
+    Evaluates probabilistic calibration (ECE, MCE, NLL, Brier score, accuracy, confidence)
+    streaming batches directly from test_loader (and fitting temperature scaling on val_loader if provided).
+    Streams batch-level sufficient statistics (1D arrays) to avoid allocating full (N, C) probability matrices.
+
+    Scientific invariant & contract:
+    - Brier score multiclasse is computed via incremental quadratic expansion:
+        mean(sum(p^2) - 2 * p_true + 1).
+    - If val_loader is provided, optimal temperature T* is fitted strictly on validation logits.
+    - Preserves sample conservation and guarantees zero memory explosion on large datasets.
+    """
+    dev = torch.device(device) if isinstance(device, str) else device
+    amp_enabled = dev.type == "cuda"
+    eps = 1e-15
+
+    audit_report: Dict[str, Any] = {
+        "nominal_noise_rates": noise_rates,
+        "seed": seed,
+        "n_bins": n_bins,
+        "models": {},
+    }
+
+    for model_name, model in models_dict.items():
+        model.eval()
+        model.to(dev)
+        audit_report["models"][model_name] = {}
+
+        # If val_loader is provided, fit optimal temperature T* on validation clean split
+        optimal_temp: Optional[float] = None
+        if val_loader is not None:
+            val_logits_chunks: List[torch.Tensor] = []
+            val_labels_chunks: List[torch.Tensor] = []
+            with torch.no_grad():
+                val_b_idx = 0
+                for batch in val_loader:
+                    if max_batches is not None and val_b_idx >= max_batches:
+                        break
+                    val_b_idx += 1
+                    if isinstance(batch, (list, tuple)):
+                        v_inputs, v_labels = batch[0], batch[1]
+                    elif isinstance(batch, dict):
+                        v_inputs = batch.get("inputs") or batch.get("sequences")
+                        v_labels = batch.get("labels") or batch.get("targets")
+                    else:
+                        v_inputs, v_labels = batch, None
+
+                    if v_inputs.dim() == 3 and v_inputs.shape[0] == 1:
+                        v_inputs = v_inputs.squeeze(0)
+                    if v_labels is not None and v_labels.dim() == 2 and v_labels.shape[0] == 1:
+                        v_labels = v_labels.squeeze(0)
+
+                    v_inputs = v_inputs.to(dev)
+                    with torch.amp.autocast("cuda", enabled=amp_enabled):
+                        v_logits = model(v_inputs)
+                    val_logits_chunks.append(v_logits.cpu().float())
+                    if v_labels is not None:
+                        val_labels_chunks.append(v_labels.cpu().long())
+
+            if val_logits_chunks and val_labels_chunks:
+                all_val_logits = torch.cat(val_logits_chunks, dim=0)
+                all_val_labels = torch.cat(val_labels_chunks, dim=0)
+                scaler = TemperatureScaler(initial_temperature=1.0)
+                scaler.fit(all_val_logits, all_val_labels, split_name="validation")
+                optimal_temp = scaler.temperature
+
+        for rate in noise_rates:
+            rate_key = f"noise_{rate}"
+            gen = torch.Generator(device="cpu").manual_seed(seed)
+
+            top1_preds_chunks: List[np.ndarray] = []
+            top1_confs_chunks: List[np.ndarray] = []
+            p_true_chunks: List[np.ndarray] = []
+            sum_p_sq_chunks: List[np.ndarray] = []
+            y_chunks: List[np.ndarray] = []
+
+            # Optional calibrated statistics if optimal_temp is available
+            cal_top1_confs_chunks: List[np.ndarray] = []
+            cal_p_true_chunks: List[np.ndarray] = []
+            cal_sum_p_sq_chunks: List[np.ndarray] = []
+
+            batch_idx = 0
+            with torch.no_grad():
+                for batch in test_loader:
+                    if max_batches is not None and batch_idx >= max_batches:
+                        break
+                    batch_idx += 1
+
+                    if isinstance(batch, (list, tuple)):
+                        batch_inputs, batch_labels = batch[0], batch[1]
+                    elif isinstance(batch, dict):
+                        batch_inputs = batch.get("inputs") or batch.get("sequences")
+                        batch_labels = batch.get("labels") or batch.get("targets")
+                    else:
+                        batch_inputs, batch_labels = batch, None
+
+                    if batch_inputs.dim() == 3 and batch_inputs.shape[0] == 1:
+                        batch_inputs = batch_inputs.squeeze(0)
+                    if batch_labels is not None and batch_labels.dim() == 2 and batch_labels.shape[0] == 1:
+                        batch_labels = batch_labels.squeeze(0)
+
+                    if rate > 0.0:
+                        batch_inputs = inject_noise(
+                            sequences=batch_inputs,
+                            noise_rate=rate,
+                            generator=gen,
+                        )
+
+                    batch_inputs = batch_inputs.to(dev)
+                    with torch.amp.autocast("cuda", enabled=amp_enabled):
+                        logits = model(batch_inputs)
+                    probs = F.softmax(logits.float(), dim=-1)
+
+                    b_confs, b_preds = torch.max(probs, dim=-1)
+                    b_sum_sq = torch.sum(probs * probs, dim=-1)
+
+                    if batch_labels is not None:
+                        b_y_dev = batch_labels.to(dev).long()
+                        valid_m = (b_y_dev >= 0) & (b_y_dev < probs.shape[-1])
+                        b_p_true = torch.zeros(len(b_y_dev), dtype=torch.float32, device=dev)
+                        if valid_m.any():
+                            idx_valid = torch.nonzero(valid_m, as_tuple=False).squeeze(1)
+                            b_p_true[idx_valid] = probs[idx_valid, b_y_dev[idx_valid]]
+                        y_chunks.append(b_y_dev.cpu().numpy().astype(np.int64))
+                    else:
+                        b_p_true = torch.zeros(len(b_confs), dtype=torch.float32, device=dev)
+
+                    top1_preds_chunks.append(b_preds.cpu().numpy().astype(np.int64))
+                    top1_confs_chunks.append(b_confs.cpu().numpy().astype(np.float64))
+                    p_true_chunks.append(b_p_true.cpu().numpy().astype(np.float64))
+                    sum_p_sq_chunks.append(b_sum_sq.cpu().numpy().astype(np.float64))
+
+                    if optimal_temp is not None:
+                        cal_probs = F.softmax(logits.float() / optimal_temp, dim=-1)
+                        c_confs, _ = torch.max(cal_probs, dim=-1)
+                        c_sum_sq = torch.sum(cal_probs * cal_probs, dim=-1)
+                        c_p_true = torch.zeros(len(b_p_true), dtype=torch.float32, device=dev)
+                        if batch_labels is not None and valid_m.any():
+                            c_p_true[idx_valid] = cal_probs[idx_valid, b_y_dev[idx_valid]]
+                        cal_top1_confs_chunks.append(c_confs.cpu().numpy().astype(np.float64))
+                        cal_sum_p_sq_chunks.append(c_sum_sq.cpu().numpy().astype(np.float64))
+                        cal_p_true_chunks.append(c_p_true.cpu().numpy().astype(np.float64))
+
+            if not top1_preds_chunks:
+                raise ValueError("test_loader produced 0 batches for calibration evaluation.")
+
+            top1_preds = np.concatenate(top1_preds_chunks, axis=0)
+            top1_confs = np.concatenate(top1_confs_chunks, axis=0)
+            p_true = np.concatenate(p_true_chunks, axis=0)
+            sum_p_sq = np.concatenate(sum_p_sq_chunks, axis=0)
+            n_samples = len(top1_preds)
+
+            if y_chunks:
+                y_np = np.concatenate(y_chunks, axis=0)
+                is_correct = (top1_preds == y_np)
+                top1_acc = float(np.mean(is_correct) * 100.0)
+            else:
+                y_np = np.zeros(n_samples, dtype=np.int64)
+                is_correct = np.zeros(n_samples, dtype=bool)
+                top1_acc = 0.0
+
+            top1_conf = float(np.mean(top1_confs))
+            conf_on_correct = float(np.mean(top1_confs[is_correct])) if np.any(is_correct) else 0.0
+            conf_on_incorrect = float(np.mean(top1_confs[~is_correct])) if np.any(~is_correct) else 0.0
+            overconfidence_gap = float(top1_conf - (top1_acc / 100.0))
+            is_overconfident = overconfidence_gap > 0.10
+
+            bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+            bin_indices = np.clip(np.digitize(top1_confs, bin_edges) - 1, 0, n_bins - 1)
+            ece = 0.0
+            mce = 0.0
+            sum_weights = 0.0
+            for b_idx in range(n_bins):
+                mask = (bin_indices == b_idx)
+                bin_count = int(np.sum(mask))
+                weight = float(bin_count / n_samples)
+                sum_weights += round(weight, 6)
+                if bin_count > 0:
+                    bin_conf = float(np.mean(top1_confs[mask]))
+                    bin_acc = float(np.mean(is_correct[mask]))
+                    cal_gap = round(float(abs(bin_acc - bin_conf)), 6)
+                    ece += (bin_count / n_samples) * cal_gap
+                    if cal_gap > mce:
+                        mce = cal_gap
+
+            p_true_clamped = np.clip(p_true, eps, 1.0)
+            nll = float(-np.mean(np.log(p_true_clamped)))
+            brier_score = float(np.mean(sum_p_sq - 2.0 * p_true + 1.0))
+
+            metrics = CalibrationMetrics(
+                top1_accuracy=round(top1_acc, 4),
+                top1_confidence=round(top1_conf, 6),
+                ece=round(ece, 6),
+                mce=round(mce, 6),
+                nll=round(nll, 6),
+                brier_score=round(brier_score, 6),
+                n_samples=n_samples,
+                n_bins=n_bins,
+                binning_strategy="equal_width",
+                sum_bin_weights=round(sum_weights, 6),
+                conf_on_correct=round(conf_on_correct, 6),
+                conf_on_incorrect=round(conf_on_incorrect, 6),
+                overconfidence_gap=round(overconfidence_gap, 6),
+                is_overconfident_regime=is_overconfident,
+            )
+            res_dict = metrics.to_dict()
+
+            if optimal_temp is not None and cal_top1_confs_chunks:
+                c_confs = np.concatenate(cal_top1_confs_chunks, axis=0)
+                c_p_true = np.concatenate(cal_p_true_chunks, axis=0)
+                c_sum_sq = np.concatenate(cal_sum_p_sq_chunks, axis=0)
+
+                c_bin_indices = np.clip(np.digitize(c_confs, bin_edges) - 1, 0, n_bins - 1)
+                c_ece = 0.0
+                c_mce = 0.0
+                for b_idx in range(n_bins):
+                    mask = (c_bin_indices == b_idx)
+                    bin_count = int(np.sum(mask))
+                    if bin_count > 0:
+                        bin_conf = float(np.mean(c_confs[mask]))
+                        bin_acc = float(np.mean(is_correct[mask]))
+                        cal_gap = round(float(abs(bin_acc - bin_conf)), 6)
+                        c_ece += (bin_count / n_samples) * cal_gap
+                        if cal_gap > c_mce:
+                            c_mce = cal_gap
+
+                c_nll = float(-np.mean(np.log(np.clip(c_p_true, eps, 1.0))))
+                c_brier = float(np.mean(c_sum_sq - 2.0 * c_p_true + 1.0))
+
+                res_dict["optimal_temperature"] = round(optimal_temp, 4)
+                res_dict["calibrated_ece"] = round(c_ece, 6)
+                res_dict["calibrated_mce"] = round(c_mce, 6)
+                res_dict["calibrated_nll"] = round(c_nll, 6)
+                res_dict["calibrated_brier"] = round(c_brier, 6)
+                res_dict["calibrated_top1_confidence"] = round(float(np.mean(c_confs)), 6)
+
+            audit_report["models"][model_name][rate_key] = res_dict
+
+    return audit_report
+
+
 class TaxonomyEntropyAnalyzer:
     """
     Hierarchical predictive entropy and pre-classifier activation entropy analyzer.

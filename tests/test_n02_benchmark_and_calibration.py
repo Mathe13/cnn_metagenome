@@ -19,8 +19,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from viral_cnn.eval.calibration import TaxonomyEntropyAnalyzer
+from viral_cnn.eval.calibration import (
+    TaxonomyEntropyAnalyzer,
+    audit_dataloader_calibration_by_noise,
+)
 from viral_cnn.eval.confusion import compare_confused_species_identity
+from viral_cnn.taxonomy.mapping import build_species_to_genus_tensor
 from viral_cnn.eval.metrics import (
     compute_species_f1_bands,
     compute_species_specialist_comparison,
@@ -612,6 +616,215 @@ class TestN02BenchmarkAndCalibration(unittest.TestCase):
         ]
         for m in expected_models:
             self.assertIn(m, manifest_data["checkpoints"])
+
+    # -------------------------------------------------------------------------
+    # Slice R03: Real Calibration, Hierarchical Entropy, and Pair Identity
+    # -------------------------------------------------------------------------
+
+    def test_r03_build_species_to_genus_tensor_valid(self):
+        """C1: build_species_to_genus_tensor produces a valid LongTensor mapping 0-based species to contiguous genera."""
+        parquet_path = Path(self.temp_dir) / "test_tax.parquet"
+        df_tax = pd.DataFrame({
+            "id": list(range(1, 11)),
+            "species": [f"Species_{i}" for i in range(10)],
+            "Genus": ["Genus_A", "Genus_A", "Genus_B", "Genus_B", "Genus_C",
+                      "Genus_C", "Genus_D", "Genus_D", "Genus_E", "Genus_E"],
+        })
+        df_tax.to_parquet(parquet_path)
+
+        tensor = build_species_to_genus_tensor(parquet_path, num_species=10, device=self.device)
+        self.assertIsInstance(tensor, torch.Tensor)
+        self.assertEqual(tensor.dtype, torch.long)
+        self.assertEqual(tensor.shape, (10,))
+        self.assertEqual(tensor.unique().numel(), 5)
+        # Verify contiguous 0-based indexing [0..4]
+        self.assertEqual(tensor.min().item(), 0)
+        self.assertEqual(tensor.max().item(), 4)
+        # Verify pairs map to the same genus
+        self.assertEqual(tensor[0].item(), tensor[1].item())
+        self.assertEqual(tensor[2].item(), tensor[3].item())
+        self.assertNotEqual(tensor[0].item(), tensor[2].item())
+
+        # Test against cleansed taxonomy parquet if present (100 species -> 20 genera in local reproduction)
+        real_parquet = Path("results_reproduction/taxonomy/main_taxonomy_hybrid_CLEANSED.parquet")
+        if real_parquet.exists():
+            real_tensor = build_species_to_genus_tensor(real_parquet, num_species=100, device=self.device)
+            self.assertEqual(real_tensor.shape, (100,))
+            self.assertEqual(real_tensor.unique().numel(), 20)
+
+    def test_r03_build_species_to_genus_tensor_degenerate_error(self):
+        """C2: build_species_to_genus_tensor raises ValueError on degenerate (single-genus) or invalid parquet."""
+        parquet_path = Path(self.temp_dir) / "degraded_tax.parquet"
+        # All 10 species map to a single genus
+        df_degraded = pd.DataFrame({
+            "id": list(range(1, 11)),
+            "species": [f"Species_{i}" for i in range(10)],
+            "Genus": ["Single_Genus"] * 10,
+        })
+        df_degraded.to_parquet(parquet_path)
+
+        with self.assertRaises(ValueError) as ctx_err:
+            build_species_to_genus_tensor(parquet_path, num_species=10, device=self.device)
+        self.assertIn("Degenerate taxonomy mapping", str(ctx_err.exception))
+
+        # Missing required genus column
+        bad_col_parquet = Path(self.temp_dir) / "bad_col.parquet"
+        pd.DataFrame({"id": [1, 2], "species": ["A", "B"]}).to_parquet(bad_col_parquet)
+        with self.assertRaises(ValueError) as ctx_err2:
+            build_species_to_genus_tensor(bad_col_parquet, num_species=2, device=self.device)
+        self.assertIn("must contain one of", str(ctx_err2.exception))
+
+        # Non-existent file raises FileNotFoundError
+        with self.assertRaises(FileNotFoundError):
+            build_species_to_genus_tensor("/non/existent/path.parquet", num_species=10)
+
+    def test_r03_taxonomy_entropy_analyzer_valid_bounds(self):
+        """C3: TaxonomyEntropyAnalyzer produces H_genus > 0, H_species >= H_genus, and finite H_act with no NaNs."""
+        class MockClassifier(nn.Module):
+            def __init__(self, in_features=32, num_classes=5):
+                super().__init__()
+                self.backbone = nn.Linear(16, in_features)
+                self.fc = nn.Linear(in_features, num_classes)
+
+            def forward(self, x):
+                feats = torch.relu(self.backbone(x))
+                return self.fc(feats)
+
+        model = MockClassifier(in_features=32, num_classes=5)
+        # 5 species mapped to 3 genera: [0, 0, 1, 1, 2]
+        species_to_genus = torch.tensor([0, 0, 1, 1, 2], dtype=torch.long)
+
+        analyzer = TaxonomyEntropyAnalyzer(model, species_to_genus, device=self.device)
+        inputs = torch.randn(8, 16)
+        metrics = analyzer.analyze_batch(inputs)
+
+        h_species = metrics["h_species"]
+        h_genus = metrics["h_genus"]
+        h_act = metrics["h_activation"]
+        gap = metrics["hierarchical_entropy_gap"]
+
+        self.assertTrue(np.all(h_species > 0.0), f"h_species should be > 0: {h_species}")
+        self.assertTrue(np.all(h_genus > 0.0), f"h_genus should be > 0: {h_genus}")
+        self.assertTrue(np.all(gap >= -1e-6), f"Gap = H_sp - H_gen should be >= 0: {gap}")
+        self.assertFalse(np.isnan(h_act).any(), f"h_activation contains NaN: {h_act}")
+        self.assertTrue(np.all((h_act >= 0.0) & (h_act <= 1.0)), f"h_act should be in [0, 1]: {h_act}")
+
+        analyzer.remove_hook()
+
+    def test_r03_audit_dataloader_calibration_streaming(self):
+        """C4: audit_dataloader_calibration_by_noise streams batches, computing ECE, MCE, NLL, Brier score."""
+        class MockEmbeddingModel(nn.Module):
+            def __init__(self, num_classes=5):
+                super().__init__()
+                self.embed = nn.Embedding(4, 8)
+                self.fc = nn.Linear(8 * 16, num_classes)
+
+            def forward(self, x):
+                b = x.shape[0]
+                em = self.embed(x).view(b, -1)
+                return self.fc(em)
+
+        model = MockEmbeddingModel(num_classes=5)
+        # 4 batches of 16 tokens (len 16) with labels 0..4
+        tokens = torch.randint(0, 4, (64, 16))
+        labels = torch.randint(0, 5, (64,))
+        ds = TensorDataset(tokens, labels)
+        loader = DataLoader(ds, batch_size=16, shuffle=False)
+
+        report = audit_dataloader_calibration_by_noise(
+            models_dict={"mock_cnn": model},
+            test_loader=loader,
+            noise_rates=[0.0, 0.05],
+            device=self.device,
+            n_bins=10,
+            seed=42,
+        )
+
+        self.assertIn("mock_cnn", report["models"])
+        for rate_key in ["noise_0.0", "noise_0.05"]:
+            metrics = report["models"]["mock_cnn"][rate_key]
+            self.assertEqual(metrics["n_samples"], 64)
+            self.assertGreaterEqual(metrics["top1_accuracy"], 0.0)
+            self.assertLessEqual(metrics["top1_accuracy"], 100.0)
+            self.assertGreaterEqual(metrics["top1_confidence"], 0.0)
+            self.assertLessEqual(metrics["top1_confidence"], 1.0)
+            self.assertGreaterEqual(metrics["ece"], 0.0)
+            self.assertGreaterEqual(metrics["mce"], 0.0)
+            self.assertGreaterEqual(metrics["brier_score"], 0.0)
+            self.assertGreaterEqual(metrics["nll"], 0.0)
+            self.assertFalse(math.isnan(metrics["brier_score"]))
+            self.assertFalse(math.isnan(metrics["nll"]))
+
+    def test_r03_audit_dataloader_calibration_temperature_scaling(self):
+        """C5: audit_dataloader_calibration_by_noise fits optimal temperature T* on val_loader and reports calibrated metrics."""
+        class MockModel(nn.Module):
+            def __init__(self, num_classes=5):
+                super().__init__()
+                self.embed = nn.Embedding(4, 8)
+                self.fc = nn.Linear(8 * 16, num_classes)
+
+            def forward(self, x):
+                b = x.shape[0]
+                return self.fc(self.embed(x).view(b, -1))
+
+        model = MockModel(num_classes=5)
+        test_loader = DataLoader(
+            TensorDataset(torch.randint(0, 4, (32, 16)), torch.randint(0, 5, (32,))),
+            batch_size=16,
+        )
+        val_loader = DataLoader(
+            TensorDataset(torch.randint(0, 4, (32, 16)), torch.randint(0, 5, (32,))),
+            batch_size=16,
+        )
+
+        report = audit_dataloader_calibration_by_noise(
+            models_dict={"mock_model": model},
+            test_loader=test_loader,
+            val_loader=val_loader,
+            noise_rates=[0.0],
+            device=self.device,
+            n_bins=10,
+        )
+
+        metrics = report["models"]["mock_model"]["noise_0.0"]
+        self.assertIn("optimal_temperature", metrics)
+        self.assertGreater(metrics["optimal_temperature"], 0.0)
+        self.assertIn("calibrated_ece", metrics)
+        self.assertIn("calibrated_mce", metrics)
+        self.assertIn("calibrated_nll", metrics)
+        self.assertIn("calibrated_brier", metrics)
+        self.assertFalse(math.isnan(metrics["calibrated_ece"]))
+        self.assertFalse(math.isnan(metrics["calibrated_brier"]))
+
+    def test_r03_notebook_02_real_data_and_table_prints(self):
+        """C6: Notebook 02 uses real sequence decoding in Cell 4, build_species_to_genus_tensor in Cell 6, and dataloader calibration in Cell 7."""
+        nb_path = Path("notebooks/reproduction/short/02_analyze_confidence_and_calibration.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        cell_4_src = "".join(nb["cells"][4]["source"])
+        cell_6_src = "".join(nb["cells"][6]["source"])
+        cell_7_src = "".join(nb["cells"][7]["source"])
+
+        # Cell 4 checks
+        self.assertIn("samples_by_id", cell_4_src)
+        self.assertIn("compare_confused_species_identity", cell_4_src)
+        self.assertNotIn('"ACGT" * 128', cell_4_src)
+        self.assertIn("df_identity.to_string()", cell_4_src)
+
+        # Cell 6 checks
+        self.assertIn("build_species_to_genus_tensor", cell_6_src)
+        self.assertNotIn("torch.zeros(13683", cell_6_src)
+        self.assertIn("df_entropy.to_string()", cell_6_src)
+        for var in ["resnet_clean_species", "resnet_noise_species", "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species"]:
+            self.assertIn(var, cell_6_src)
+
+        # Cell 7 checks
+        self.assertIn("audit_dataloader_calibration_by_noise", cell_7_src)
+        self.assertNotIn('"ACGT" * 128', cell_7_src)
+        self.assertIn("df_cal.to_string()", cell_7_src)
+        for var in ["resnet_clean_species", "resnet_noise_species", "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species"]:
+            self.assertIn(var, cell_7_src)
 
 
 if __name__ == "__main__":

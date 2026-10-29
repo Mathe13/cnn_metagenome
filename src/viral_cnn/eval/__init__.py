@@ -34,6 +34,7 @@ from .calibration import (
     compute_reliability_diagram,
     save_reliability_diagram,
     TemperatureScaler,
+    audit_dataloader_calibration_by_noise,
     audit_model_calibration_by_noise,
     TaxonomyEntropyAnalyzer,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "compute_reliability_diagram",
     "save_reliability_diagram",
     "TemperatureScaler",
+    "audit_dataloader_calibration_by_noise",
     "audit_model_calibration_by_noise",
     "TaxonomyEntropyAnalyzer",
     "compute_and_plot_confusion_insights",

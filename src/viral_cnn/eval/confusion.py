@@ -198,6 +198,14 @@ def get_confused_class_samples(
                 "target_pred_id": pred_id_int,
                 "score": score,
             }
+        if pred_id_int not in target_classes_map:
+            target_classes_map[pred_id_int] = {
+                "id_true": pred_id_int,
+                "total_confused_score": score,
+                "examples": [],
+                "target_pred_id": true_id_int,
+                "score": score,
+            }
 
     if not target_classes_map:
         return []

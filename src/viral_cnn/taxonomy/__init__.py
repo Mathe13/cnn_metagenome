@@ -9,6 +9,7 @@ from .curation import (
     sanitize_hybrid_taxonomy,
 )
 from .mapping import (
+    build_species_to_genus_tensor,
     load_taxonomy_mapping,
     model_label_to_taxonomic_id,
     taxonomic_id_to_model_label,
@@ -18,6 +19,7 @@ __all__ = [
     "taxonomic_id_to_model_label",
     "model_label_to_taxonomic_id",
     "load_taxonomy_mapping",
+    "build_species_to_genus_tensor",
     "ICTV_RANKS",
     "build_ictv_rename_map",
     "match_ictv_taxonomy",

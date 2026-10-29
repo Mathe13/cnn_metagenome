@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r03-real-calibration-and-hierarchical-entropy
-**Where**: R02 complete and independently verified (Verdict: PASS); starting R03 (plan.md)
-**In progress**: `.specs/features/r03-real-calibration-and-hierarchical-entropy/plan.md`
-**Next step**: Author `plan.md` for R03, validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
+**Where**: Plan and checks approved; starting BUILD
+**In progress**: Implementation of Door 1 (build_species_to_genus_tensor), Door 2 (audit_dataloader_calibration_by_noise), and notebook 02 sanitation
+**Next step**: Implement codebase changes, write unit tests for C1-C6, run proofs, and dispatch independent verifier
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
