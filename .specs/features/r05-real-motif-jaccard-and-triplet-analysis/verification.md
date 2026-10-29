@@ -1,0 +1,22 @@
+# r05-real-motif-jaccard-and-triplet-analysis verification
+
+**Verdict**: PASS
+**Profile**: light
+**Diff range**: 83fb14b01b0064c30ab8f5091353867a96e3b4d9..ba41fd6
+**Round**: 1 - full
+**Verifier**: independent sub-agent (author != verifier)
+
+## Checks
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C1 | `compute_motif_presence_matrix_from_loader` scans DataLoader batches, decodes nucleotide tokens, and returns a binary matrix of shape $(N, M)$ matching exact 7-mer occurrences without fabricated constant lines | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_compute_motif_presence_matrix_loader` exit 0 | `tests/test_n05_motifs_and_triplets.py:260-277` - `self.assertEqual(mat_tokens.shape, (3, 3))`, `self.assertEqual(mat_tokens[0, 0], 1.0)`, `self.assertEqual(mat_tokens[0, 1], 1.0)`, `self.assertEqual(mat_tokens[0, 2], 0.0)`, `self.assertEqual(mat_tokens[1, 0], 1.0)`, `self.assertEqual(mat_strings.shape, (3, 3))`, `np.testing.assert_array_equal(mat_tokens, mat_strings)` | PASS |
+| C2 | `compute_jaccard_cooccurrence` computes symmetric pairwise Jaccard index from empirical presence matrices with unit diagonal and non-degenerate off-diagonal values | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_jaccard_cooccurrence_symmetry_and_values` exit 0 | `tests/test_n05_motifs_and_triplets.py:291-295` - `self.assertEqual(jacc_df.shape, (3, 3))`, `np.testing.assert_allclose(mat, mat.T, atol=1e-6)`, `np.testing.assert_allclose(np.diag(mat), np.ones(3), atol=1e-6)`, `self.assertTrue((mat >= 0.0).all() and (mat <= 1.0).all())` | PASS |
+| C3 | `notebooks/reproduction/short/07_first_layer_motifs_and_perturbation.ipynb` evaluates motif perturbation across all 5 species model variants, saves `table_08_motif_perturbation.csv` and `motif_summary.parquet`, and exports empirical Jaccard matrices from Cell 9 | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_notebook_07_five_variants_and_jaccard_matrices` exit 0 | `tests/test_n05_motifs_and_triplets.py:305-323` - `self.assertIn("compute_motif_presence_matrix_from_loader", c9_code)`, `self.assertNotIn("presence[:, 0] = 1.0", c9_code)`, `self.assertTrue(t8_path.exists())`, `self.assertTrue(t8_parquet.exists())`, `self.assertIn("model_name", df_summary.columns)`, `self.assertIn("motif", df_summary.columns)` | PASS |
+| C4 | `notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb` loads learned motifs from `results_reproduction/motifs/motif_summary.parquet` in Cell 5 and raises `FileNotFoundError` immediately when `is_smoke_test == False` and the artifact is missing on disk | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_notebook_08_fail_fast_missing_motif_summary` exit 0 | `tests/test_n05_motifs_and_triplets.py:348-349` - `with self.assertRaises(FileNotFoundError): exec(c5_code, global_ns)` | PASS |
+| C5 | `notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb` generates Table 10 auditing translation boundary signals (`start_atg`, `stop_taa`, `stop_tag`, `stop_tga`) on learned motifs and saves `table_10_translation_boundary_signals.csv` | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_notebook_08_table_10_boundary_signals` exit 0 | `tests/test_n05_motifs_and_triplets.py:365-371` - `self.assertTrue(t10_path.exists())`, `self.assertIn("start_atg", signals)`, `self.assertIn("stop_taa", signals)`, `self.assertIn("stop_tag", signals)`, `self.assertIn("stop_tga", signals)` | PASS |
+| C6 | `notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb` evaluates Table 11 symmetry and computes inter-architecture co-occurrence correlations without degenerate $r = 1.0$ across distinct networks, and both notebooks complete in under 60 seconds in smoke mode | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k test_r05_notebook_08_table_11_and_inter_architecture_correlations` exit 0 | `tests/test_n05_motifs_and_triplets.py:385-388` - `self.assertTrue(t11_path.exists())`, `self.assertIn("r_canonical", df11.columns)`, `self.assertIn("p_permutation_null", df11.columns)` | PASS |
+
+## Gate
+
+`PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n05_motifs_and_triplets.py -k "test_r05_"` - 6 passed, 0 failed

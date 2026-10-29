@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r05-real-motif-jaccard-and-triplet-analysis
-**Where**: Implementation completed; all 6 proof checks passing; ready for independent verification
-**In progress**: Independent verification by fresh subagent
-**Next step**: Run independent verification subagent, validate verification with `validate_verification.py --strict`, commit and report
+**Where**: Feature r05 verified and complete; all 6 checks passed with independent verification gate exiting 0. Ready for next feature in roadmap or user sign-off.
+**In progress**: none
+**Next step**: User sign-off or next roadmap feature
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
