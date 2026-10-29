@@ -1,7 +1,7 @@
 {
   "notebook_id": "01_benchmark_clean_and_noise",
-  "timestamp_utc": "2026-10-26T23:12:45.178471+00:00",
-  "git_commit": "a007431eab4d423dc231c43d68ce83ffda4adc34",
+  "timestamp_utc": "2026-10-29T01:05:21.685565+00:00",
+  "git_commit": "ccbf574e0a7e153f2e4d0a96afd8f5c6a4b760c6",
   "seed": 42,
   "data_root": "/home/matheus/Documents/cnn_metagenome",
   "is_smoke_test": true,
@@ -13,8 +13,19 @@
     "pandas": "2.3.3",
     "pyarrow": "25.0.1"
   },
-  "checkpoints": {},
-  "input_files": [],
+  "checkpoints": {
+    "resnet_clean_species": "/home/matheus/Documents/cnn_metagenome/cnn_kraken_species/checkpoints/best_resnet_classifier__fast_phase4.pt",
+    "resnet_noise_species": "/home/matheus/Documents/cnn_metagenome/cnn_kraken/checkpoint_finetune_resnet/finetune_noise_14.pt",
+    "convnext_zero_species": "/home/matheus/Documents/cnn_metagenome/cnn_kraken/checkpoint_species_conv_zero/best_convnext_phase3_restarts_v2.pt",
+    "convnext_transfer_species": "/home/matheus/Documents/cnn_metagenome/cnn_kraken/checkpoint_transfer_species_conv/best_convnext_classifier_fast_phase4_2_restarts.pt",
+    "convnext_noise_species": "/home/matheus/Documents/cnn_metagenome/cnn_kraken/checkpoint_transfer_species_conv/finetune_noise_7.pt",
+    "resnet_genus": "/home/matheus/Documents/cnn_metagenome/cnn_kraken_genus/best_resnet_classifier__fast_phase4.pt",
+    "convnext_genus": "/home/matheus/Documents/cnn_metagenome/cnn_kraken/checkpoint_genus_conv/best_convnext_classifier_fast_phase4_2.pt"
+  },
+  "input_files": [
+    "/home/matheus/Documents/cnn_metagenome/cnn_kraken/processed_kraken_species_splited_parquet",
+    "/home/matheus/Documents/cnn_metagenome/cnn_kraken/processed_kraken_genus_splited_parquet"
+  ],
   "metrics_summary": {
     "evaluated_models": 7,
     "noise_levels": [

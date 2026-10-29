@@ -151,6 +151,8 @@ class TestN02BenchmarkAndCalibration(unittest.TestCase):
         )
 
         required_keys = {
+            "backbone_params",
+            "head_params",
             "total_params",
             "trainable_params",
             "size_mb",
@@ -320,6 +322,7 @@ class TestN02BenchmarkAndCalibration(unittest.TestCase):
             "table2_profiling.csv",
             "table4_f1_bands.csv",
             "specialist_comparison.csv",
+            "specialist_comparison_eps010.csv",
             "manifest.json",
         ]
         for fname in expected_files:
@@ -408,6 +411,207 @@ class TestN02BenchmarkAndCalibration(unittest.TestCase):
             "",
             f"Historical directories short/ or long/ have modified files:\n{git_status}",
         )
+
+    # -------------------------------------------------------------------------
+    # Spec R01: Parameter Reconciliation, Fail-Fast and Benchmark Tracking
+    # -------------------------------------------------------------------------
+
+    def test_r01_resnet_parameter_decomposition(self):
+        """C1: profile_inference_model decomposes ResNet50_1D parameters for Species and Genus."""
+        # Species (13683)
+        model_species = build_model("resnet50_1d", num_classes=13683)
+        prof_sp = profile_inference_model(model_species, input_size=(2, 512), device=self.device, num_warmup=1, num_runs=1)
+        self.assertEqual(prof_sp["backbone_params"], 15955584)
+        self.assertEqual(prof_sp["head_params"], 28036467)
+        self.assertEqual(prof_sp["total_params"], 43992051)
+        self.assertEqual(prof_sp["backbone_params"] + prof_sp["head_params"], prof_sp["total_params"])
+
+        # Genus (2702)
+        model_genus = build_model("resnet50_1d", num_classes=2702)
+        prof_gen = profile_inference_model(model_genus, input_size=(2, 512), device=self.device, num_warmup=1, num_runs=1)
+        self.assertEqual(prof_gen["backbone_params"], 15955584)
+        self.assertEqual(prof_gen["head_params"], 5536398)
+        self.assertEqual(prof_gen["total_params"], 21491982)
+        self.assertEqual(prof_gen["backbone_params"] + prof_gen["head_params"], prof_gen["total_params"])
+
+    def test_r01_convnext_parameter_decomposition(self):
+        """C2: profile_inference_model decomposes ConvNeXt_Tiny_1D parameters for Species and Genus."""
+        # Species (13683)
+        model_species = build_model("convnext_tiny_1d", num_classes=13683)
+        prof_sp = profile_inference_model(model_species, input_size=(2, 512), device=self.device, num_warmup=1, num_runs=1)
+        self.assertEqual(prof_sp["backbone_params"], 135977344)
+        self.assertEqual(prof_sp["head_params"], 28036467)
+        self.assertEqual(prof_sp["total_params"], 164013811)
+        self.assertEqual(prof_sp["backbone_params"] + prof_sp["head_params"], prof_sp["total_params"])
+
+        # Genus (2702)
+        model_genus = build_model("convnext_tiny_1d", num_classes=2702)
+        prof_gen = profile_inference_model(model_genus, input_size=(2, 512), device=self.device, num_warmup=1, num_runs=1)
+        self.assertEqual(prof_gen["backbone_params"], 135977344)
+        self.assertEqual(prof_gen["head_params"], 5536398)
+        self.assertEqual(prof_gen["total_params"], 141513742)
+        self.assertEqual(prof_gen["backbone_params"] + prof_gen["head_params"], prof_gen["total_params"])
+
+    def test_r01_gitignore_selective_tracking(self):
+        """C3: git check-ignore allows lightweight records and blocks binary weights/parquets under results_reproduction/."""
+        # Ignored files
+        ignored_files = [
+            "results_reproduction/checkpoints/resnet50_noise/finetune_noise_last.pt",
+            "results_reproduction/checkpoints/convnext_noise/finetune_noise_1.pth",
+            "results_reproduction/taxonomy/main_taxonomy_hybrid_CLEANSED.parquet",
+            "results_reproduction/index.sqlite",
+            "results_reproduction/cache.db",
+        ]
+        for f in ignored_files:
+            ret = subprocess.run(["git", "check-ignore", f], capture_output=True)
+            self.assertEqual(ret.returncode, 0, f"Expected {f} to be ignored by .gitignore")
+
+        # Tracked files (not ignored)
+        tracked_files = [
+            "results_reproduction/n02_benchmark/benchmark_clean_noise_summary.csv",
+            "results_reproduction/n02_benchmark/manifest.json",
+            "results_reproduction/manifest.yaml",
+            "results_reproduction/figure.png",
+        ]
+        for f in tracked_files:
+            ret = subprocess.run(["git", "check-ignore", f], capture_output=True)
+            self.assertNotEqual(ret.returncode, 0, f"Expected {f} to be tracked (not ignored) by .gitignore")
+
+    def test_r01_notebook_01_fail_fast_missing_checkpoint(self):
+        """C4: Notebook 01 cell 3 raises FileNotFoundError if is_smoke_test is False and a checkpoint is missing."""
+        nb_path = Path("notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        from unittest.mock import MagicMock
+        mock_ctx = MagicMock()
+        mock_ctx.is_smoke_test = False
+        mock_ctx.topology.paths = {
+            "checkpoints": {
+                "resnet_clean_species": "/nonexistent/checkpoint/path.pt",
+            }
+        }
+        mock_ctx.device = "cpu"
+
+        cell_3_code = "".join(nb["cells"][3]["source"])
+        ns = {
+            "ctx": mock_ctx,
+            "Path": Path,
+            "species_variants": ["resnet_clean_species"],
+            "genus_variants": [],
+            "build_registered_model": build_registered_model,
+            "profile_inference_model": profile_inference_model,
+            "free_gpu_memory": lambda m: None,
+            "pd": pd,
+            "output_dir": Path(self.temp_dir),
+        }
+        with self.assertRaises(FileNotFoundError):
+            exec(cell_3_code, ns)
+
+    def test_r01_notebook_01_fail_fast_sample_count(self):
+        """C5: Notebook 01 cell 4 raises RuntimeError if is_smoke_test is False and n_samples diverges."""
+        nb_path = Path("notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        from unittest.mock import MagicMock
+        mock_ctx = MagicMock()
+        mock_ctx.is_smoke_test = False
+        mock_ctx.topology.paths = {
+            "checkpoints": {v: None for v in [
+                "resnet_clean_species", "resnet_noise_species", "convnext_zero_species",
+                "convnext_transfer_species", "convnext_noise_species", "resnet_genus", "convnext_genus"
+            ]}
+        }
+        mock_ctx.device = "cpu"
+
+        class MockMetrics:
+            top1_accuracy = 0.5
+            top5_accuracy = 0.8
+            macro_f1 = 0.5
+            weighted_f1 = 0.5
+            cross_entropy_loss = 2.0
+            n_samples = 100  # Diverges from 1706270
+
+        class MockResult:
+            effective_noise_rate = 0.0
+            metrics = MockMetrics()
+            f1_bands = {"bands": {}}
+            y_true_arr = None
+            y_pred_arr = None
+            confs_arr = None
+            predictions = []
+
+        mock_evals = {0.0: MockResult()}
+
+        cell_4_code = "".join(nb["cells"][4]["source"])
+        ns = {
+            "ctx": mock_ctx,
+            "Path": Path,
+            "species_variants": ["resnet_clean_species"],
+            "genus_variants": [],
+            "build_registered_model": lambda *a, **kw: nn.Linear(10, 5),
+            "evaluate_dataloader": lambda *a, **kw: mock_evals,
+            "test_loader_species": None,
+            "test_loader_genus": None,
+            "free_gpu_memory": lambda m: None,
+            "pd": pd,
+            "output_dir": Path(self.temp_dir),
+        }
+        with self.assertRaises(RuntimeError) as ctx_err:
+            exec(cell_4_code, ns)
+        self.assertIn("Species sample count mismatch", str(ctx_err.exception))
+
+    def test_r01_notebook_01_prints_tables_and_manifest(self):
+        """C6: Notebook 01 executes in smoke mode, prints tables to stdout, and logs 7 checkpoints in manifest."""
+        import io
+        import sys
+
+        nb_path = Path("notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        captured_stdout = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured_stdout
+
+        global_ns = {"__name__": "__main__"}
+        try:
+            for cell in nb["cells"]:
+                if cell.get("cell_type") == "code":
+                    exec("".join(cell.get("source", [])), global_ns)
+        finally:
+            sys.stdout = old_stdout
+
+        output_text = captured_stdout.getvalue()
+        self.assertIn("Profiling table saved.", output_text)
+        self.assertIn("Benchmark summary saved.", output_text)
+        self.assertIn("Table 4 F1 bands saved.", output_text)
+        self.assertIn("Specialist Comparison at epsilon = 0.05", output_text)
+        self.assertIn("Specialist Comparison at epsilon = 0.10", output_text)
+        self.assertIn("Manifest successfully written.", output_text)
+
+        out_dir = Path("results_reproduction/n02_benchmark")
+        self.assertTrue((out_dir / "specialist_comparison.csv").exists())
+        self.assertTrue((out_dir / "specialist_comparison_eps010.csv").exists())
+
+        manifest_path = out_dir / "manifest.json"
+        self.assertTrue(manifest_path.exists())
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest_data = json.load(f)
+
+        self.assertIn("checkpoints", manifest_data)
+        expected_models = [
+            "resnet_clean_species",
+            "resnet_noise_species",
+            "convnext_zero_species",
+            "convnext_transfer_species",
+            "convnext_noise_species",
+            "resnet_genus",
+            "convnext_genus",
+        ]
+        for m in expected_models:
+            self.assertIn(m, manifest_data["checkpoints"])
 
 
 if __name__ == "__main__":

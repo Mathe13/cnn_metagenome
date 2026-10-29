@@ -9,7 +9,12 @@ dist/
 build/
 .ipynb_checkpoints/
 dataset_kraken/*_seqs.csv
-results_reproduction/
+# Heavy binary artifacts under results_reproduction are ignored, while lightweight CSV, JSON, YAML, and PNG files are tracked
+results_reproduction/**/*.pt
+results_reproduction/**/*.pth
+results_reproduction/**/*.parquet
+results_reproduction/**/*.sqlite*
+results_reproduction/**/*.db
 cnn_kraken/
 processed_ncbi_splited_parquet/
 *.aux

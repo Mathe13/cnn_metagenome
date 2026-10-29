@@ -150,6 +150,13 @@ def profile_inference_model(
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+    head_params = 0
+    if hasattr(model, "fc") and isinstance(model.fc, nn.Module):
+        head_params = sum(p.numel() for p in model.fc.parameters())
+    elif hasattr(model, "classifier") and isinstance(model.classifier, nn.Module):
+        head_params = sum(p.numel() for p in model.classifier.parameters())
+    backbone_params = int(total_params - head_params)
+
     # 2. Footprint in MB
     param_size = sum(p.numel() * p.element_size() for p in model.parameters())
     buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
@@ -187,6 +194,8 @@ def profile_inference_model(
     throughput = (batch_size / (avg_latency / 1000.0)) if avg_latency > 0 else 0.0
 
     return {
+        "backbone_params": int(backbone_params),
+        "head_params": int(head_params),
         "total_params": int(total_params),
         "trainable_params": int(trainable_params),
         "size_mb": round(float(total_size_mb), 2),

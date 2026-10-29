@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: fix-overlap-duplicate-sequence-column
-**Where**: Completed and verified (`Verdict: PASS`, `Round: 1`)
-**In progress**: none
-**Next step**: Ready for remote cluster execution of reproduction notebooks (`09`, `03`, `04`, `02`, `01`, `10`)
+**Feature**: r01-parameter-reconciliation-and-benchmark-tracking
+**Where**: Plan written and validated (`validate_plan.py --strict` exit 0); awaiting user confirmation before `checks.md` -> Build -> Verify
+**In progress**: `.specs/features/r01-parameter-reconciliation-and-benchmark-tracking/plan.md`
+**Next step**: Derive `checks.md`, implement S1-S2 (`profiler.py`, `.gitignore`, `01_benchmark_clean_and_noise.ipynb`, unit tests), and dispatch independent Verifier
 **Blockers**: none
-**Uncommitted**: feature `fix-overlap-duplicate-sequence-column` ready in working tree
+**Uncommitted**: `.specs/features/r01-parameter-reconciliation-and-benchmark-tracking/plan.md`
 **Branch**: main
