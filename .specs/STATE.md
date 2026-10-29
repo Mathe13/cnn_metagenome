@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r04-real-latent-embeddings-and-taxonomy-audit
-**Where**: R03 complete and independently verified (Verdict: PASS); ready to start R04
+**Where**: `plan.md` authored and validated with `validate_plan.py --strict` (0 errors, 0 warnings); ready for checks derivation
 **In progress**: none
-**Next step**: Author `plan.md` for R04 (`r04-real-latent-embeddings-and-taxonomy-audit`), validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
+**Next step**: Present plan to user, derive `checks.md`, validate with `validate_checks.py`, build and verify
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main

@@ -200,6 +200,7 @@ def evaluate_cosine_knn(
 
     k_eff = min(k, len(X_ref))
     preds_list: List[torch.Tensor] = []
+    top5_hits_list: List[torch.Tensor] = []
 
     for i in range(0, len(X_query), batch_size):
         batch_x = F.normalize(X_query[i : i + batch_size].to(dev), p=2, dim=1)
@@ -212,19 +213,32 @@ def evaluate_cosine_knn(
         mode_preds, _ = torch.mode(topk_labels, dim=1)
         preds_list.append(mode_preds.cpu())
 
+        # Top-5 hit check: is true query label in top-k nearest neighbors?
+        batch_y = y_query[i : i + batch_size].to(dev)
+        top5_hits = (topk_labels == batch_y.unsqueeze(1)).any(dim=1)
+        top5_hits_list.append(top5_hits.cpu())
+
     y_pred = torch.cat(preds_list).numpy()
     y_true = y_query.numpy()
+    top5_correct = torch.cat(top5_hits_list).numpy() if top5_hits_list else np.empty((0,), dtype=bool)
 
     correct = (y_pred == y_true)
     global_acc = float(np.mean(correct)) if len(correct) > 0 else 0.0
+    global_top5_acc = float(np.mean(top5_correct)) if len(top5_correct) > 0 else 0.0
 
     # Per-cluster accuracy table
-    df_cluster = pd.DataFrame({"y_true": y_true, "y_pred": y_pred, "correct": correct})
+    df_cluster = pd.DataFrame({
+        "y_true": y_true,
+        "y_pred": y_pred,
+        "correct": correct,
+        "top5_correct": top5_correct,
+    })
     cluster_summary = (
         df_cluster.groupby("y_true")
         .agg(
             test_samples=("correct", "count"),
             knn_accuracy=("correct", "mean"),
+            knn_top5_accuracy=("top5_correct", "mean"),
         )
         .reset_index()
         .rename(columns={"y_true": "class_label"})
@@ -234,6 +248,7 @@ def evaluate_cosine_knn(
     return {
         "taxonomic_rank": taxonomic_rank,
         "global_knn_accuracy": global_acc,
+        "global_knn_top5_accuracy": global_top5_acc,
         "k": k_eff,
         "n_reference": len(X_ref),
         "n_query": len(X_query),

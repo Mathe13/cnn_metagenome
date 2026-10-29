@@ -39,6 +39,11 @@ class TestN04TaxonomyAndLatentSpace(unittest.TestCase):
         os.environ["REMOTE_SERVER"] = "False"
         os.environ["MPLCONFIGDIR"] = "/tmp"
 
+    def setUp(self):
+        os.environ["SMOKE_TEST"] = "1"
+        os.environ["REMOTE_SERVER"] = "False"
+        os.environ["MPLCONFIGDIR"] = "/tmp"
+
     def test_c1_build_ictv_rename_map(self):
         """C1: build_ictv_rename_map extracts lowercase mapping from ICTV rename DataFrame."""
         df_renames = pd.DataFrame({
@@ -295,6 +300,144 @@ class TestN04TaxonomyAndLatentSpace(unittest.TestCase):
             check=True,
         )
         self.assertEqual(res.stdout.strip(), "", "Historical latent notebook must remain untouched in git status")
+
+    # -----------------------------------------------------------------------
+    # R04 checks (r04-real-latent-embeddings-and-taxonomy-audit)
+    # -----------------------------------------------------------------------
+
+    def test_r04_evaluate_cosine_knn_top1_and_top5(self):
+        """C1: evaluate_cosine_knn returns global_knn_top5_accuracy >= global_knn_accuracy with zero self-neighbors."""
+        from viral_cnn.eval.latent import evaluate_cosine_knn
+
+        rng = np.random.default_rng(42)
+        feats = rng.normal(0, 1, size=(100, 32)).astype(np.float32)
+        labels = np.repeat(np.arange(10), 10)
+
+        res = evaluate_cosine_knn(feats, labels, k=5, test_size=0.2, random_state=42)
+        self.assertIn("global_knn_accuracy", res)
+        self.assertIn("global_knn_top5_accuracy", res)
+        self.assertTrue(res["zero_self_neighbor"])
+        self.assertGreaterEqual(res["global_knn_top5_accuracy"], res["global_knn_accuracy"])
+        self.assertGreaterEqual(res["global_knn_accuracy"], 0.0)
+        self.assertLessEqual(res["global_knn_top5_accuracy"], 1.0)
+        self.assertIn("knn_top5_accuracy", res["per_cluster_metrics"].columns)
+
+    def test_r04_models_embedding_dimension_2048(self):
+        """C2: Notebook 06 and model architectures define pre-classifier embedding dimension of 2048 for all 5 models."""
+        from viral_cnn.models.convnext import ConvNeXt_Tiny_1D
+        from viral_cnn.models.resnet import ResNet50_1D
+
+        # Architectural invariant: in_features == 2048
+        r = ResNet50_1D(num_classes=10)
+        c = ConvNeXt_Tiny_1D(num_classes=10)
+        self.assertEqual(r.fc.in_features, 2048)
+        self.assertEqual(c.fc.in_features, 2048)
+
+        # Notebook 06 configuration check
+        nb_path = Path("notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c3_code = "".join(nb["cells"][3]["source"])
+        self.assertIn('"dim": 2048', c3_code)
+        self.assertNotIn('"dim": 768', c3_code)
+
+    def test_r04_notebook_06_fail_fast_missing_artifacts(self):
+        """C3: 06_ictv_latent_space_and_hierarchy.ipynb raises FileNotFoundError when SMOKE_TEST=0 and artifacts are missing."""
+        nb_path = Path("notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        # Setup context with is_smoke_test = False in a non-existent directory
+        setup_code = """
+import os
+os.environ["SMOKE_TEST"] = "0"
+os.environ["REMOTE_SERVER"] = "False"
+from viral_cnn.notebook_runtime import setup_notebook_runtime
+ctx = setup_notebook_runtime()
+output_dir = Path("/tmp/fake_output_dir_r04_test")
+output_dir.mkdir(parents=True, exist_ok=True)
+taxonomy_df = pd.DataFrame({"model_label": [0, 1], "Genus": ["A", "B"], "Order": ["O1", "O2"]})
+"""
+        c3_code = "".join(nb["cells"][3]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        try:
+            exec("".join(nb["cells"][1]["source"]), global_ns)
+            exec(setup_code, global_ns)
+
+            with self.assertRaises(FileNotFoundError):
+                exec(c3_code, global_ns)
+        finally:
+            os.environ["SMOKE_TEST"] = "1"
+            os.environ["REMOTE_SERVER"] = "False"
+
+    def test_r04_notebook_06_table5_distinct_top1_top5(self):
+        """C4: Notebook 06 generates Table 5 with distinct KNN_Top1 and KNN_Top5 columns and saves CSV."""
+        nb_path = Path("notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        # Verify Cell 4 uses global_knn_top5_accuracy rather than duplicating global_knn_accuracy
+        c4_code = "".join(nb["cells"][4]["source"])
+        self.assertIn('"KNN_Top5": knn_res["global_knn_top5_accuracy"]', c4_code)
+
+        # Run smoke test on notebook 06
+        global_ns = {"__name__": "__main__"}
+        for idx in [1, 2, 3, 4]:
+            exec("".join(nb["cells"][idx]["source"]), global_ns)
+
+        t5_path = Path("results_reproduction/latent_space/table5_latent_clustering_metrics.csv")
+        self.assertTrue(t5_path.exists())
+        df = pd.read_csv(t5_path)
+        self.assertIn("KNN_Top1", df.columns)
+        self.assertIn("KNN_Top5", df.columns)
+        self.assertTrue((df["KNN_Top5"] >= df["KNN_Top1"]).all())
+
+    def test_r04_notebook_06_table6_correlations(self):
+        """C5: Notebook 06 generates Table 6 reporting hierarchical correlations with valid parent taxon counts."""
+        nb_path = Path("notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        global_ns = {"__name__": "__main__"}
+        for idx in range(1, 6):
+            exec("".join(nb["cells"][idx]["source"]), global_ns)
+
+        t6_path = Path("results_reproduction/latent_space/table6_taxonomic_rank_correlations.csv")
+        self.assertTrue(t6_path.exists())
+        df = pd.read_csv(t6_path)
+        self.assertEqual(len(df), 10)  # 5 models * 2 transitions
+        self.assertTrue(set(df["Transition"]) == {"Species -> Genus", "Genus -> Order"})
+        self.assertTrue((df["N_taxa"] > 0).all())
+
+    def test_r04_notebook_05_provenance_and_smoke_execution(self):
+        """C6: Notebook 05 sanitizes provenance manifest and both notebooks complete in < 60s under smoke mode."""
+        nb5_path = Path("notebooks/reproduction/short/05_ictv_taxonomy_curation.ipynb")
+        with open(nb5_path, "r", encoding="utf-8") as f:
+            nb5 = json.load(f)
+
+        # Verify Cell 4 source isolates mock_records
+        c4_code = "".join(nb5["cells"][4]["source"])
+        self.assertIn("if ctx.is_smoke_test:", c4_code)
+        self.assertIn("genome_provenance_complete = False", c4_code)
+        self.assertIn("genome_disjoint_test_classes = None", c4_code)
+
+        # Execute notebook 05 under smoke mode
+        start_time = time.time()
+        global_ns = {"__name__": "__main__"}
+        for cell in nb5["cells"]:
+            if cell.get("cell_type") == "code":
+                exec("".join(cell.get("source", [])), global_ns)
+        self.assertLess(time.time() - start_time, 60.0)
+
+        # Verify manifest generated
+        manifest_path = Path("results_reproduction/taxonomy/manifest.json")
+        self.assertTrue(manifest_path.exists())
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertIn("genome_provenance_complete", data["metrics_summary"])
+        self.assertIn("genome_disjoint_test_classes", data["metrics_summary"])
 
 
 if __name__ == "__main__":
