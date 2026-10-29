@@ -54,3 +54,6 @@ Where each unwritten requirement landed. All nine, one line each, every time.
 ## Handoff
 
 - S1 = ~4k tokens, S2 = ~6k tokens, total ~10k tokens across 4 files (`src/viral_cnn/training/profiler.py`, `.gitignore`, `notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb`, `tests/test_n02_benchmark_and_calibration.py`), well under the 150k budget - one builder
+- **Boundary:** C1-C6 closed at `c1c15da`
+- **Settled mid-build:** none
+- **Abandoned:** none

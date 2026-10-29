@@ -1,0 +1,23 @@
+# r01-parameter-reconciliation-and-benchmark-tracking verification
+
+**Verdict**: PASS
+**Profile**: light
+**Diff range**: ccbf574..HEAD
+**Round**: 1 - full
+**Verifier**: independent sub-agent (author != verifier)
+
+## Checks
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C1 | `profile_inference_model` decomposes parameters for `ResNet50_1D` returning `backbone_params == 15955584`, `head_params == 28036467` and `total_params == 43992051` for Species ($13.683$ classes), and `backbone_params == 15955584`, `head_params == 5536398` and `total_params == 21491982` for Genus ($2.702$ classes) | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_resnet_parameter_decomposition` exit 0 | `tests/test_n02_benchmark_and_calibration.py:424` - `assertEqual(prof_sp["backbone_params"], 15955584)`, line 425 `assertEqual(prof_sp["head_params"], 28036467)`, line 426 `assertEqual(prof_sp["total_params"], 43992051)`, line 432 `assertEqual(prof_gen["backbone_params"], 15955584)`, line 433 `assertEqual(prof_gen["head_params"], 5536398)`, line 434 `assertEqual(prof_gen["total_params"], 21491982)` | PASS |
+| C2 | `profile_inference_model` decomposes parameters for `ConvNeXt_Tiny_1D` returning `backbone_params == 135977344`, `head_params == 28036467` and `total_params == 164013811` for Species ($13.683$ classes), and `backbone_params == 135977344`, `head_params == 5536398` and `total_params == 141513742` for Genus ($2.702$ classes) | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_convnext_parameter_decomposition` exit 0 | `tests/test_n02_benchmark_and_calibration.py:442` - `assertEqual(prof_sp["backbone_params"], 135977344)`, line 443 `assertEqual(prof_sp["head_params"], 28036467)`, line 444 `assertEqual(prof_sp["total_params"], 164013811)`, line 450 `assertEqual(prof_gen["backbone_params"], 135977344)`, line 451 `assertEqual(prof_gen["head_params"], 5536398)`, line 452 `assertEqual(prof_gen["total_params"], 141513742)` | PASS |
+| C3 | `git check-ignore` permits tracking of `.csv`, `.json`, `.yaml`, and `.png` files under `results_reproduction/` while ignoring `.pt`, `.parquet`, and `.sqlite` files | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_gitignore_selective_tracking` exit 0 | `tests/test_n02_benchmark_and_calibration.py:467` - `assertEqual(ret.returncode, 0)` for `.pt`, `.pth`, `.parquet`, `.sqlite`, `.db` and line 478 `assertNotEqual(ret.returncode, 0)` for `.csv`, `.json`, `.yaml`, `.png` | PASS |
+| C4 | `notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb` raises `FileNotFoundError` when `ctx.is_smoke_test == False` and any required checkpoint file does not exist on disk | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_notebook_01_fail_fast_missing_checkpoint` exit 0 | `tests/test_n02_benchmark_and_calibration.py:508` - `with self.assertRaises(FileNotFoundError): exec(cell_3_code, ns)` | PASS |
+| C5 | `notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb` raises `RuntimeError` when `ctx.is_smoke_test == False` and sample counts diverge from $1.706.270$ (Species) or $816.756$ (Genus) | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_notebook_01_fail_fast_sample_count` exit 0 | `tests/test_n02_benchmark_and_calibration.py:561` - `with self.assertRaises(RuntimeError) as ctx_err: exec(cell_4_code, ns)` and line 563 `assertIn("Species sample count mismatch", str(ctx_err.exception))` | PASS |
+| C6 | `notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb` prints `df_prof`, `df_summary`, `df_f1_bands`, and specialist comparisons for $\epsilon \in \{0.05, 0.10\}$ into cell stdout, saves `specialist_comparison.csv` and `specialist_comparison_eps010.csv`, and records all 7 evaluated model checkpoint paths in `manifest.json` | `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k test_r01_notebook_01_prints_tables_and_manifest` exit 0 | `tests/test_n02_benchmark_and_calibration.py:587` - `assertIn("Profiling table saved.", output_text)`, lines 588-592 table/manifest prints, lines 595-596 `assertTrue((out_dir / "specialist_comparison.csv").exists())` and `specialist_comparison_eps010.csv`, and lines 603, 614 `assertIn(m, manifest_data["checkpoints"])` for all 7 models | PASS |
+
+## Gate
+
+`PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py -k "test_r01_"` - 6 passed, 0 failed
+`PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_n02_benchmark_and_calibration.py` - 24 passed, 0 failed

@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r01-parameter-reconciliation-and-benchmark-tracking
-**Where**: Plan written and validated (`validate_plan.py --strict` exit 0); awaiting user confirmation before `checks.md` -> Build -> Verify
-**In progress**: `.specs/features/r01-parameter-reconciliation-and-benchmark-tracking/plan.md`
-**Next step**: Derive `checks.md`, implement S1-S2 (`profiler.py`, `.gitignore`, `01_benchmark_clean_and_noise.ipynb`, unit tests), and dispatch independent Verifier
+**Feature**: r02-finetune-lr-schedule-and-trainer-parity
+**Where**: R01 complete and independently verified (Verdict: PASS); starting R02 (plan.md)
+**In progress**: `.specs/features/r02-finetune-lr-schedule-and-trainer-parity/plan.md`
+**Next step**: Author `plan.md` for R02, validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
 **Blockers**: none
-**Uncommitted**: `.specs/features/r01-parameter-reconciliation-and-benchmark-tracking/plan.md`
+**Uncommitted**: none
 **Branch**: main
