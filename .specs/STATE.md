@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: n09-notebook-throughput-and-gpu-pipeline-optimization
+**Feature**: fix-overlap-duplicate-sequence-column
 **Where**: Completed and verified (`Verdict: PASS`, `Round: 1`)
 **In progress**: none
-**Next step**: Ready for remote cluster execution of reproduction notebooks (`03`, `04`, `02`, `01`, `10`)
+**Next step**: Ready for remote cluster execution of reproduction notebooks (`09`, `03`, `04`, `02`, `01`, `10`)
 **Blockers**: none
-**Uncommitted**: feature `n09-notebook-throughput-and-gpu-pipeline-optimization` ready in working tree
+**Uncommitted**: feature `fix-overlap-duplicate-sequence-column` ready in working tree
 **Branch**: main

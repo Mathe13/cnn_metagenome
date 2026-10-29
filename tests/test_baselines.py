@@ -129,6 +129,94 @@ class TestExactOverlapAndEvaluator(unittest.TestCase):
         self.assertFalse(masks["overlap"][1])
         self.assertTrue(masks["no_exact_overlap"][1])
 
+    def test_audit_exact_overlap_handles_duplicate_sequence_columns(self):
+        """C1: Extract scalar string sequences from the first matching column when DataFrame has duplicate 'sequence' columns."""
+        seq_match = "ACGT" * 128
+        seq_novel = "TTTT" * 128
+        df_multi = pd.DataFrame({
+            "sequence_padded": [seq_match, seq_novel],
+            "sequence": ["RAW_UNPADDED_1", "RAW_UNPADDED_2"],
+            "label": [0, 1],
+            "query_id": ["q1", "q2"],
+        })
+        # Simulate .rename(columns={"sequence_padded": "sequence"}) producing duplicate 'sequence' columns
+        df_dup = df_multi.rename(columns={"sequence_padded": "sequence"})
+        self.assertEqual(list(df_dup.columns), ["sequence", "sequence", "label", "query_id"])
+
+        audit_df, masks = audit_exact_overlap(df_dup, [seq_match])
+        self.assertEqual(len(audit_df), 2)
+        self.assertEqual(list(audit_df["query_id"]), ["q1", "q2"])
+        self.assertEqual(int(audit_df.loc[0, "train_count"]), 1)
+        self.assertEqual(int(audit_df.loc[1, "train_count"]), 0)
+        self.assertEqual(list(masks["overlap"]), [True, False])
+        self.assertEqual(list(masks["no_exact_overlap"]), [False, True])
+
+    def test_audit_exact_overlap_resolves_canonical_sequence_column_names(self):
+        """C2: Resolve sequence column in priority order ('sequence_padded', 'padded_Representation', 'sequence')."""
+        seq_a = "ACGT" * 128
+        seq_b = "GGGG" * 128
+        for col_name in ("sequence_padded", "padded_Representation", "sequence"):
+            df_col = pd.DataFrame({
+                "query_id": ["q1", "q2"],
+                col_name: [seq_a, seq_b],
+                "label": [0, 1],
+            })
+            audit_df, masks = audit_exact_overlap(df_col, [seq_a])
+            self.assertEqual(len(audit_df), 2)
+            self.assertEqual(int(audit_df.loc[0, "train_count"]), 1)
+            self.assertEqual(int(audit_df.loc[1, "train_count"]), 0)
+            self.assertEqual(list(masks["overlap"]), [True, False])
+
+        # Priority order check when both 'sequence_padded' and 'sequence' exist without renaming
+        df_both = pd.DataFrame({
+            "query_id": ["q1"],
+            "sequence": [seq_b],
+            "sequence_padded": [seq_a],
+            "label": [0],
+        })
+        audit_both, masks_both = audit_exact_overlap(df_both, [seq_a])
+        self.assertEqual(int(audit_both.loc[0, "train_count"]), 1)
+        self.assertEqual(list(masks_both["overlap"]), [True])
+
+    def test_notebook_09_unique_sequence_column_construction(self):
+        """C3: Notebook 09 builds df_test_queries with unique ['query_id', 'sequence', 'label'] columns without duplicate rename."""
+        import json
+
+        nb_path = PROJECT_ROOT / "notebooks" / "reproduction" / "short" / "09_benchmark_cnns_kraken2_blast_overlap.ipynb"
+        nb_data = json.loads(nb_path.read_text(encoding="utf-8"))
+        cell_sources = "\n".join("".join(c.get("source", [])) for c in nb_data["cells"] if c.get("cell_type") == "code")
+        self.assertNotIn("rename(columns={col: \"sequence\"})", cell_sources)
+
+        # Verify that none of the saved cell outputs contain an error traceback
+        error_outputs = [
+            out.get("ename")
+            for c in nb_data["cells"]
+            for out in c.get("outputs", [])
+            if out.get("output_type") == "error"
+        ]
+        self.assertEqual(error_outputs, [])
+
+        # Simulate multi-column Parquet sample returned by read_parquet_sample when both sequence_padded and sequence exist
+        df_raw_test = pd.DataFrame({
+            "sequence_padded": ["ACGT" * 128, "CCCC" * 128],
+            "sequence": ["ACGT", "CCCC"],
+            "label": [0, 1],
+        })
+        col = (
+            "sequence_padded"
+            if "sequence_padded" in df_raw_test.columns
+            else ("padded_Representation" if "padded_Representation" in df_raw_test.columns else "sequence")
+        )
+        df_test_queries = pd.DataFrame({
+            "query_id": [f"test_q_{i:05d}" for i in range(len(df_raw_test))],
+            "sequence": df_raw_test[col].tolist(),
+            "label": df_raw_test["label"].astype(int).tolist(),
+        })
+        self.assertEqual(list(df_test_queries.columns), ["query_id", "sequence", "label"])
+        self.assertIsInstance(df_test_queries["sequence"], pd.Series)
+        audit_df, masks = audit_exact_overlap(df_test_queries, ["ACGT" * 128])
+        self.assertEqual(list(masks["overlap"]), [True, False])
+
     def test_evaluate_predictions_abstention_counted_in_denominator(self):
         """C8: Abstentions (pred == -1) count as errors in the total denominator N."""
         y_true = [0, 1, 2, 3]
