@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r02-finetune-lr-schedule-and-trainer-parity
-**Where**: R01 complete and independently verified (Verdict: PASS); starting R02 (plan.md)
-**In progress**: `.specs/features/r02-finetune-lr-schedule-and-trainer-parity/plan.md`
-**Next step**: Author `plan.md` for R02, validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
+**Feature**: r03-real-calibration-and-hierarchical-entropy
+**Where**: R02 complete and independently verified (Verdict: PASS); starting R03 (plan.md)
+**In progress**: `.specs/features/r03-real-calibration-and-hierarchical-entropy/plan.md`
+**Next step**: Author `plan.md` for R03, validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main

@@ -51,7 +51,7 @@ Where each unwritten requirement landed. All nine, one line each, every time.
 ## Handoff
 
 - S1 = ~5k tokens, S2 = ~7k tokens, total ~12k tokens across 5 files (`src/viral_cnn/training/config.py`, `src/viral_cnn/training/trainer.py`, `notebooks/reproduction/short/03_finetune_resnet50_species.ipynb`, `notebooks/reproduction/short/04_finetune_convnext_species.ipynb`, `tests/test_n03_finetune_training.py`), well under the 150k budget - one builder
-- **Boundary:** not yet closed
+- **Boundary:** C1-C5 closed at 4d815e6
 - **Settled mid-build:** none
 - **Abandoned:** none
 
