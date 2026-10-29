@@ -3,7 +3,7 @@ Unified training loop and evaluation for controlled architecture experiments.
 """
 
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Iterator, Literal, Optional, Sequence
 import math
 import numpy as np
 import torch
@@ -52,7 +52,11 @@ class ControlledTrainer:
 
         # Optimizer: AdamW on trainable parameters
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        initial_lr = self._compute_scheduled_lr(0)
+        is_historical = (
+            getattr(self.config, "mode", None) == "historical_reproduction"
+            or getattr(self.config, "warmup_steps", 0) == 0
+        )
+        initial_lr = float(self.config.learning_rate) if is_historical else self._compute_scheduled_lr(0)
         self.optimizer = torch.optim.AdamW(
             trainable_params if trainable_params else self.model.parameters(),
             lr=initial_lr,
@@ -168,12 +172,17 @@ class ControlledTrainer:
         max_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         scheduler: Optional[Any] = None,
+        scheduler_step_unit: Optional[Literal["epoch", "batch"]] = None,
     ) -> dict[str, float]:
         """
         Executes a full training epoch with optional noise corruption and metric accumulation.
         """
         self.model.train()
         self._apply_bn_eval()
+
+        step_unit = scheduler_step_unit or getattr(self.config, "scheduler_step_unit", "epoch")
+        has_stepped_optimizer = False
+        epoch_lr = self.get_current_lr()
 
         running_loss_t = torch.zeros((), dtype=torch.float64, device=self.device)
         total_samples = 0
@@ -218,6 +227,7 @@ class ControlledTrainer:
                 logits = self.model(batch_x)
                 loss = self.criterion(logits, batch_y)
 
+            optimizer_stepped = False
             if self.scaler.is_enabled():
                 self.scaler.scale(loss).backward()
                 if self.config.grad_clip_norm is not None:
@@ -225,8 +235,11 @@ class ControlledTrainer:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.config.grad_clip_norm
                     )
+                scale_before = self.scaler.get_scale()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
+                scale_after = self.scaler.get_scale()
+                optimizer_stepped = (scale_after >= scale_before)
             else:
                 loss.backward()
                 if self.config.grad_clip_norm is not None:
@@ -234,9 +247,12 @@ class ControlledTrainer:
                         self.model.parameters(), self.config.grad_clip_norm
                     )
                 self.optimizer.step()
+                optimizer_stepped = True
 
-            if scheduler is not None:
-                scheduler.step()
+            if optimizer_stepped:
+                has_stepped_optimizer = True
+                if scheduler is not None and step_unit == "batch":
+                    scheduler.step()
 
             with torch.no_grad():
                 running_loss_t += loss.detach().to(torch.float64) * b_size
@@ -257,6 +273,9 @@ class ControlledTrainer:
             batch_count += 1
             self.current_step += 1
 
+        if scheduler is not None and step_unit == "epoch" and has_stepped_optimizer:
+            scheduler.step()
+
         if total_samples == 0:
             return {
                 "train_loss": 0.0,
@@ -264,7 +283,7 @@ class ControlledTrainer:
                 "train_f1": 0.0,
                 "train_f1_weighted": 0.0,
                 "total_samples": 0,
-                "learning_rate": self.get_current_lr(),
+                "learning_rate": epoch_lr,
             }
 
         running_loss = float(running_loss_t.item())
@@ -287,7 +306,7 @@ class ControlledTrainer:
             "train_f1": float(macro_f1),
             "train_f1_weighted": float(weighted_f1),
             "total_samples": total_samples,
-            "learning_rate": self.get_current_lr(),
+            "learning_rate": epoch_lr,
         }
 
     def evaluate_epoch(
@@ -456,6 +475,7 @@ class ControlledTrainer:
         metrics: dict[str, Any],
         save_path: Path | str,
         scheduler: Optional[Any] = None,
+        training_history: Optional[list[dict[str, Any]]] = None,
     ) -> Path:
         """
         Serializes full training state dictionary compatible with historical resume keys.
@@ -478,6 +498,7 @@ class ControlledTrainer:
             "scheduler_state_dict": sched_state,
             "scaler_state_dict": scaler_state,
             "metrics": metrics,
+            "training_history": list(training_history) if training_history is not None else [],
             "config": {
                 "num_classes": self.config.num_classes,
                 "noise_rate": self.config.noise_rate,
@@ -491,16 +512,16 @@ class ControlledTrainer:
         torch.save(payload, path)
         return path
 
-    def resume_checkpoint(
+    def load_resume_checkpoint(
         self,
-        checkpoint_path: Path | str,
+        resume_path: Path | str,
         scheduler: Optional[Any] = None,
-    ) -> int:
+    ) -> tuple[int, list[dict[str, Any]]]:
         """
         Restores model weights, optimizer, scheduler, and scaler from checkpoint file.
-        Returns the epoch index to resume from.
+        Returns (resume_epoch, training_history), where resume_epoch is checkpoint['epoch'] + 1.
         """
-        path = Path(checkpoint_path)
+        path = Path(resume_path)
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found at '{path}'")
 
@@ -531,5 +552,18 @@ class ControlledTrainer:
             except Exception:
                 pass
 
-        start_epoch = int(checkpoint.get("epoch", 0))
-        return start_epoch
+        saved_epoch = int(checkpoint.get("epoch", 0))
+        history = list(checkpoint.get("training_history", []))
+        return saved_epoch + 1, history
+
+    def resume_checkpoint(
+        self,
+        checkpoint_path: Path | str,
+        scheduler: Optional[Any] = None,
+    ) -> int:
+        """
+        Restores model weights, optimizer, scheduler, and scaler from checkpoint file.
+        Returns the saved epoch index.
+        """
+        next_epoch, _ = self.load_resume_checkpoint(checkpoint_path, scheduler=scheduler)
+        return next_epoch - 1

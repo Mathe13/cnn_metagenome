@@ -52,6 +52,8 @@ class ControlledExperimentConfig:
     amp: bool = True
     grad_clip_norm: float | None = 1.0
     freeze_layers: Sequence[str] = ()
+    mode: Literal["historical_reproduction", "controlled_parity"] = "controlled_parity"
+    scheduler_step_unit: Literal["epoch", "batch"] = "epoch"
 
     def __post_init__(self):
         # Normalize sequences to tuples
@@ -59,6 +61,12 @@ class ControlledExperimentConfig:
         self.channels = tuple(self.channels)
         self.seeds = tuple(self.seeds)
         self.freeze_layers = tuple(self.freeze_layers)
+
+        if self.mode not in ("historical_reproduction", "controlled_parity"):
+            raise ValueError(f"Unsupported mode '{self.mode}'. Expected 'historical_reproduction' or 'controlled_parity'")
+
+        if self.scheduler_step_unit not in ("epoch", "batch"):
+            raise ValueError(f"Unsupported scheduler_step_unit '{self.scheduler_step_unit}'. Expected 'epoch' or 'batch'")
 
         # Validate architectures
         for arch in self.architectures:
@@ -136,4 +144,6 @@ def load_controlled_config(config_path: str | Path) -> ControlledExperimentConfi
             if params.get("grad_clip_norm") is not None
             else None
         ),
+        mode=params.get("mode", "historical_reproduction"),
+        scheduler_step_unit=params.get("scheduler_step_unit", "epoch"),
     )

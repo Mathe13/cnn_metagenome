@@ -5,10 +5,15 @@ Verifies checks C1 through C14 as defined in .specs/features/n03-short-finetune-
 
 import json
 import os
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+
+src_dir = str(Path(__file__).resolve().parent.parent / "src")
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
 
 import numpy as np
 import torch
@@ -361,6 +366,176 @@ class TestN03FinetuneTraining(unittest.TestCase):
             fpath = out_dir / fname
             self.assertTrue(fpath.exists(), f"Expected artifact {fname} not found in {out_dir}")
             self.assertGreater(fpath.stat().st_size, 0)
+
+    def test_r02_initial_learning_rate_parity(self):
+        """C1 (R02): ControlledTrainer initializes optimizer lr to 5e-5 without warmup division under historical mode."""
+        model = DummyConv1DModel(num_classes=self.num_classes)
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+            learning_rate=5e-5,
+            warmup_steps=0,
+            mode="historical_reproduction",
+        )
+        trainer = ControlledTrainer(model=model, config=cfg, device=self.device)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            trainer.optimizer,
+            T_max=15,
+            eta_min=1e-7,
+        )
+        # Check initial learning rate on optimizer param groups
+        self.assertEqual(trainer.optimizer.param_groups[0]["lr"], 5e-5)
+
+        # Run Epoch 1 and check returned learning rate
+        res = trainer.train_epoch(
+            train_loader=self.loader,
+            max_batches=2,
+            scheduler=scheduler,
+            scheduler_step_unit="epoch",
+        )
+        self.assertEqual(res["learning_rate"], 5e-5)
+
+    def test_r02_scheduler_step_unit_and_gradscaler_warning_suppression(self):
+        """C2 (R02): ControlledTrainer train_epoch emits zero UserWarnings when GradScaler encounters inf gradients."""
+        import warnings
+
+        model = DummyConv1DModel(num_classes=self.num_classes)
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+            learning_rate=5e-5,
+            amp=False,
+            mode="historical_reproduction",
+        )
+        trainer = ControlledTrainer(model=model, config=cfg, device=self.device)
+
+        # Create a mock scaler that simulates skipping optimizer due to inf/nan gradients
+        class MockInfGradScaler:
+            def __init__(self):
+                self._scale = 65536.0
+
+            def is_enabled(self):
+                return True
+
+            def scale(self, loss):
+                return loss
+
+            def unscale_(self, optimizer):
+                pass
+
+            def step(self, optimizer):
+                # Simulates inf gradient: optimizer.step is NOT called
+                pass
+
+            def update(self):
+                # Scale decreases due to inf gradient
+                self._scale /= 2.0
+
+            def get_scale(self):
+                return self._scale
+
+        trainer.scaler = MockInfGradScaler()
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            trainer.optimizer,
+            T_max=10,
+            eta_min=1e-7,
+        )
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            trainer.train_epoch(
+                train_loader=self.loader,
+                max_batches=2,
+                scheduler=scheduler,
+                scheduler_step_unit="batch",
+            )
+            trainer.train_epoch(
+                train_loader=self.loader,
+                max_batches=2,
+                scheduler=scheduler,
+                scheduler_step_unit="epoch",
+            )
+
+        scheduler_warnings = [
+            w for w in captured
+            if issubclass(w.category, UserWarning) and "optimizer.step()" in str(w.message)
+        ]
+        self.assertEqual(len(scheduler_warnings), 0, f"Unexpected scheduler warnings: {scheduler_warnings}")
+
+    def test_r02_load_resume_checkpoint_preserves_history_and_next_epoch(self):
+        """C3 (R02): load_resume_checkpoint restores states, starts at epoch k + 1, and preserves prior history."""
+        model = DummyConv1DModel(num_classes=self.num_classes)
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+            learning_rate=5e-5,
+            mode="historical_reproduction",
+        )
+        trainer = ControlledTrainer(model=model, config=cfg, device=self.device)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(trainer.optimizer, T_max=15)
+
+        prior_history = [
+            {"epoch": 1, "train_loss": 2.5, "val_f1_macro": 0.40},
+            {"epoch": 2, "train_loss": 2.1, "val_f1_macro": 0.45},
+            {"epoch": 3, "train_loss": 1.8, "val_f1_macro": 0.50},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_path = Path(tmpdir) / "finetune_noise_last.pt"
+            trainer.save_epoch_checkpoint(
+                epoch=3,
+                metrics=prior_history[-1],
+                save_path=ckpt_path,
+                scheduler=scheduler,
+                training_history=prior_history,
+            )
+
+            # Fresh trainer and scheduler resuming from checkpoint
+            model2 = DummyConv1DModel(num_classes=self.num_classes)
+            trainer2 = ControlledTrainer(model=model2, config=cfg, device=self.device)
+            scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(trainer2.optimizer, T_max=15)
+
+            resume_epoch, history = trainer2.load_resume_checkpoint(ckpt_path, scheduler=scheduler2)
+            self.assertEqual(resume_epoch, 4)
+            self.assertEqual(len(history), 3)
+            self.assertEqual(history[0]["epoch"], 1)
+            self.assertEqual(history[2]["val_f1_macro"], 0.50)
+
+    def test_r02_notebooks_pretrain_evaluation_epoch0(self):
+        """C4 (R02): Notebooks 03 and 04 contain Pre-training evaluation (Epoch 0) in Cell 3."""
+        for nb_rel in [
+            "notebooks/reproduction/short/03_finetune_resnet50_species.ipynb",
+            "notebooks/reproduction/short/04_finetune_convnext_species.ipynb",
+        ]:
+            nb_path = Path(nb_rel)
+            with open(nb_path, "r", encoding="utf-8") as f:
+                nb = json.load(f)
+
+            code_cells = [c for c in nb["cells"] if c.get("cell_type") == "code"]
+            cell3_src = "".join(code_cells[2]["source"])
+
+            self.assertIn("--- Pre-training Evaluation (Epoch 0) ---", cell3_src)
+            self.assertIn("Epoch 0 Pre-Train Val Clean", cell3_src)
+            self.assertIn("Epoch 0 Pre-Train Val Noise", cell3_src)
+
+    def test_r02_notebooks_resume_logic_and_history_output(self):
+        """C5 (R02): Notebooks 03 and 04 contain automated resume logic in Cell 4 and print history in Cell 5."""
+        for nb_rel in [
+            "notebooks/reproduction/short/03_finetune_resnet50_species.ipynb",
+            "notebooks/reproduction/short/04_finetune_convnext_species.ipynb",
+        ]:
+            nb_path = Path(nb_rel)
+            with open(nb_path, "r", encoding="utf-8") as f:
+                nb = json.load(f)
+
+            code_cells = [c for c in nb["cells"] if c.get("cell_type") == "code"]
+            cell4_src = "".join(code_cells[3]["source"])
+            cell5_src = "".join(code_cells[4]["source"])
+
+            self.assertIn("load_resume_checkpoint", cell4_src)
+            self.assertIn("Resumed from Epoch", cell4_src)
+            self.assertIn("training_history=training_history", cell4_src)
+            self.assertIn("history_df.to_string()", cell5_src)
 
 
 if __name__ == "__main__":
