@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r04-real-latent-embeddings-and-taxonomy-audit
-**Where**: `plan.md` authored and validated with `validate_plan.py --strict` (0 errors, 0 warnings); ready for checks derivation
+**Where**: R04 complete and independently verified (Verdict: PASS, `validate_verification.py --strict` exited 0); ready for R05 (`r05-real-motif-jaccard-and-triplet-analysis`)
 **In progress**: none
-**Next step**: Present plan to user, derive `checks.md`, validate with `validate_checks.py`, build and verify
+**Next step**: Author `plan.md` for R05 (`r05-real-motif-jaccard-and-triplet-analysis`), validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
