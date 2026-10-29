@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r03-real-calibration-and-hierarchical-entropy
-**Where**: Plan and checks approved; starting BUILD
-**In progress**: Implementation of Door 1 (build_species_to_genus_tensor), Door 2 (audit_dataloader_calibration_by_noise), and notebook 02 sanitation
-**Next step**: Implement codebase changes, write unit tests for C1-C6, run proofs, and dispatch independent verifier
+**Feature**: r04-real-latent-embeddings-and-taxonomy-audit
+**Where**: R03 complete and independently verified (Verdict: PASS); ready to start R04
+**In progress**: none
+**Next step**: Author `plan.md` for R04 (`r04-real-latent-embeddings-and-taxonomy-audit`), validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
