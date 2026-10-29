@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r04-real-latent-embeddings-and-taxonomy-audit
-**Where**: R04 complete and independently verified (Verdict: PASS, `validate_verification.py --strict` exited 0); ready for R05 (`r05-real-motif-jaccard-and-triplet-analysis`)
-**In progress**: none
-**Next step**: Author `plan.md` for R05 (`r05-real-motif-jaccard-and-triplet-analysis`), validate with `validate_plan.py --strict`, author `checks.md`, build changes and verify
+**Feature**: r05-real-motif-jaccard-and-triplet-analysis
+**Where**: Implementation completed; all 6 proof checks passing; ready for independent verification
+**In progress**: Independent verification by fresh subagent
+**Next step**: Run independent verification subagent, validate verification with `validate_verification.py --strict`, commit and report
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main

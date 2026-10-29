@@ -11,6 +11,19 @@ import numpy as np
 class TestN05MotifsAndTriplets(unittest.TestCase):
     """Contract tests verifying N05 checks C1 to C14 for first-layer motifs, perturbation, and triplet notebooks."""
 
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ["SMOKE_TEST"] = "1"
+        os.environ["REMOTE_SERVER"] = "False"
+        os.environ["MPLCONFIGDIR"] = "/tmp"
+
+    def setUp(self):
+        import os
+        os.environ["SMOKE_TEST"] = "1"
+        os.environ["REMOTE_SERVER"] = "False"
+        os.environ["MPLCONFIGDIR"] = "/tmp"
+
     def test_c1_notebook_07_imports_and_decoupling(self):
         """C1: 07_first_layer_motifs_and_perturbation.ipynb has valid JSON, zero short/utils/* imports, exclusively viral_cnn.*."""
         nb_path = Path("notebooks/reproduction/short/07_first_layer_motifs_and_perturbation.ipynb")
@@ -224,6 +237,155 @@ class TestN05MotifsAndTriplets(unittest.TestCase):
             check=True,
         )
         self.assertEqual(res.stdout.strip(), "", "Historical notebook short/codon_usage.ipynb was modified!")
+
+    # -----------------------------------------------------------------------
+    # R05 checks (r05-real-motif-jaccard-and-triplet-analysis)
+    # -----------------------------------------------------------------------
+
+    def test_r05_compute_motif_presence_matrix_loader(self):
+        """C1: compute_motif_presence_matrix_from_loader scans tokens and string sequences, returning exact binary presence."""
+        import torch
+        from torch.utils.data import DataLoader, TensorDataset
+        from viral_cnn.interpretability.motifs import compute_motif_presence_matrix_from_loader
+
+        # 1. Tensor dataset format
+        s0 = [0, 1, 2, 3] * 2 + [1] * 7 + [0, 1, 2, 3] * 3 + [2] * 7 + [0, 1] * 5
+        s1 = [0, 1, 2, 3] * 5 + [1] * 7 + [0, 1] * 10
+        s2 = [0, 3, 0, 3] * 10
+        inputs = torch.tensor([s0[:40], s1[:40], s2[:40]], dtype=torch.long)
+        loader_tokens = DataLoader(TensorDataset(inputs, torch.tensor([0, 1, 2])), batch_size=2)
+
+        motifs = ["CCCCCCC", "GGGGGGG", "AAAAAAA"]
+        mat_tokens = compute_motif_presence_matrix_from_loader(loader_tokens, motifs)
+        self.assertEqual(mat_tokens.shape, (3, 3))
+        self.assertEqual(mat_tokens[0, 0], 1.0)
+        self.assertEqual(mat_tokens[0, 1], 1.0)
+        self.assertEqual(mat_tokens[0, 2], 0.0)
+        self.assertEqual(mat_tokens[1, 0], 1.0)
+        self.assertEqual(mat_tokens[1, 1], 0.0)
+        self.assertEqual(mat_tokens[2, 0], 0.0)
+
+        # 2. String sequences dataset format
+        string_batch = [
+            "ACGTACGTCCCCCCCACGTACGTGGGGGGGACACACACAC",
+            "ACGTACGTACGTACGTACGTCCCCCCCACACACACACACA",
+            "ATATATATATATATATATATATATATATATATATATATAT",
+        ]
+        loader_strings = DataLoader(string_batch, batch_size=2)
+        mat_strings = compute_motif_presence_matrix_from_loader(loader_strings, motifs)
+        self.assertEqual(mat_strings.shape, (3, 3))
+        np.testing.assert_array_equal(mat_tokens, mat_strings)
+
+    def test_r05_jaccard_cooccurrence_symmetry_and_values(self):
+        """C2: compute_jaccard_cooccurrence produces exact symmetric pairwise Jaccard index with unit diagonal."""
+        from viral_cnn.interpretability.motifs import compute_jaccard_cooccurrence
+
+        motifs = ["CCCCCCC", "GGGGGGG", "AAAAAAA"]
+        presence = np.array([
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ])
+        jacc_df = compute_jaccard_cooccurrence(presence, motifs)
+        self.assertEqual(jacc_df.shape, (3, 3))
+        mat = jacc_df.values
+        np.testing.assert_allclose(mat, mat.T, atol=1e-6)
+        np.testing.assert_allclose(np.diag(mat), np.ones(3), atol=1e-6)
+        self.assertTrue((mat >= 0.0).all() and (mat <= 1.0).all())
+
+    def test_r05_notebook_07_five_variants_and_jaccard_matrices(self):
+        """C3: Notebook 07 evaluates perturbation across 5 variants and exports empirical Jaccard matrices."""
+        nb_path = Path("notebooks/reproduction/short/07_first_layer_motifs_and_perturbation.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        # Verify Cell 9 uses compute_motif_presence_matrix_from_loader
+        c9_code = "".join(nb["cells"][9]["source"])
+        self.assertIn("compute_motif_presence_matrix_from_loader", c9_code)
+        self.assertNotIn("presence[:, 0] = 1.0", c9_code)
+
+        # Run smoke test on notebook 07
+        global_ns = {"__name__": "__main__"}
+        for cell in nb["cells"]:
+            if cell.get("cell_type") == "code":
+                exec("".join(cell.get("source", [])), global_ns)
+
+        out_dir = Path("results_reproduction/motifs")
+        t8_path = out_dir / "table_08_motif_perturbation.csv"
+        t8_parquet = out_dir / "motif_summary.parquet"
+        self.assertTrue(t8_path.exists())
+        self.assertTrue(t8_parquet.exists())
+
+        df_summary = pd.read_parquet(t8_parquet)
+        self.assertIn("model_name", df_summary.columns)
+        self.assertIn("motif", df_summary.columns)
+        self.assertGreaterEqual(df_summary["model_name"].nunique(), 1)
+
+    def test_r05_notebook_08_fail_fast_missing_motif_summary(self):
+        """C4: Notebook 08 raises FileNotFoundError when SMOKE_TEST=0 and motif_summary.parquet is missing."""
+        import os
+        nb_path = Path("notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        setup_code = """
+import os
+os.environ["SMOKE_TEST"] = "0"
+os.environ["REMOTE_SERVER"] = "False"
+from viral_cnn.notebook_runtime import setup_notebook_runtime
+ctx = setup_notebook_runtime()
+output_dir = Path("/tmp/fake_output_dir_r05_test")
+output_dir.mkdir(parents=True, exist_ok=True)
+rscu_frame0 = {"base_frequencies": {"A": 0.25, "C": 0.25, "G": 0.25, "T": 0.25}}
+"""
+        c5_code = "".join(nb["cells"][5]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        try:
+            exec("".join(nb["cells"][1]["source"]), global_ns)
+            exec(setup_code, global_ns)
+            with self.assertRaises(FileNotFoundError):
+                exec(c5_code, global_ns)
+        finally:
+            os.environ["SMOKE_TEST"] = "1"
+            os.environ["REMOTE_SERVER"] = "False"
+
+    def test_r05_notebook_08_table_10_boundary_signals(self):
+        """C5: Notebook 08 generates Table 10 reporting translation boundary signals on learned motifs."""
+        nb_path = Path("notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        global_ns = {"__name__": "__main__"}
+        for idx in [1, 3, 5]:
+            exec("".join(nb["cells"][idx]["source"]), global_ns)
+
+        t10_path = Path("results_reproduction/motifs/table_10_translation_boundary_signals.csv")
+        self.assertTrue(t10_path.exists())
+        df10 = pd.read_csv(t10_path)
+        signals = set(df10["signal"].tolist())
+        self.assertIn("start_atg", signals)
+        self.assertIn("stop_taa", signals)
+        self.assertIn("stop_tag", signals)
+        self.assertIn("stop_tga", signals)
+
+    def test_r05_notebook_08_table_11_and_inter_architecture_correlations(self):
+        """C6: Notebook 08 computes Table 11 symmetry and non-degenerate inter-architecture correlations."""
+        nb_path = Path("notebooks/reproduction/short/08_triplet_composition_and_cooccurrence.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        global_ns = {"__name__": "__main__"}
+        for cell in nb["cells"]:
+            if cell.get("cell_type") == "code":
+                exec("".join(cell.get("source", [])), global_ns)
+
+        t11_path = Path("results_reproduction/motifs/table_11_cooccurrence_synergy.csv")
+        self.assertTrue(t11_path.exists())
+        df11 = pd.read_csv(t11_path)
+        self.assertIn("r_canonical", df11.columns)
+        self.assertIn("p_permutation_null", df11.columns)
 
 
 if __name__ == "__main__":

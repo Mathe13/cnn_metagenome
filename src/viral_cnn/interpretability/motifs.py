@@ -7,7 +7,7 @@ import struct
 import warnings
 import zlib
 from collections import Counter
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -570,6 +570,122 @@ def audit_motif_composition_robustness(
     merged["is_confounded"] = is_confounded
     merged["verdict"] = verdicts
     return merged
+
+
+def compute_motif_presence_matrix_from_loader(
+    loader: Any,
+    motifs_list: List[str],
+    max_sequences: int = 10000,
+    device: Union[str, torch.device] = "cpu",
+) -> np.ndarray:
+    """
+    Computes empirical binary presence matrix of shape (N_seqs, N_motifs) from a sequence DataLoader
+    using vectorized 1D convolution across one-hot encoded nucleotides.
+    """
+    if not motifs_list:
+        return np.empty((0, 0), dtype=float)
+
+    dev = torch.device(device)
+    K = len(motifs_list[0])
+    base_map = {"A": 0, "C": 1, "G": 2, "T": 3}
+    kernels = torch.zeros((len(motifs_list), 4, K), device=dev, dtype=torch.float32)
+
+    for i, m in enumerate(motifs_list):
+        for pos, char in enumerate(m):
+            if char in base_map:
+                kernels[i, base_map[char], pos] = 1.0
+
+    presence_batches: List[np.ndarray] = []
+    total_seqs = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            if isinstance(batch, dict):
+                inputs = batch.get("inputs", batch.get("sequence"))
+            elif isinstance(batch, (list, tuple)):
+                if len(batch) == 2 and isinstance(batch[1], (torch.Tensor, int, float, np.number)):
+                    inputs = batch[0]
+                elif len(batch) > 0 and all(isinstance(x, str) for x in batch):
+                    inputs = batch
+                else:
+                    inputs = batch[0]
+            else:
+                inputs = batch
+
+            if inputs is None:
+                continue
+
+            if isinstance(inputs, str):
+                inputs = [inputs]
+
+            if isinstance(inputs, (list, tuple)) and len(inputs) > 0 and isinstance(inputs[0], str):
+                B_str = len(inputs)
+                L_str = max(len(s) for s in inputs)
+                t_arr = np.full((B_str, L_str), -1, dtype=np.int64)
+                for bi, s in enumerate(inputs):
+                    mapped = [base_map.get(c, -1) for c in s]
+                    t_arr[bi, :len(mapped)] = mapped
+                inputs = torch.as_tensor(t_arr, device=dev)
+
+            if isinstance(inputs, np.ndarray):
+                inputs = torch.as_tensor(inputs, device=dev)
+
+            inputs = inputs.to(dev)
+
+            if inputs.dim() == 1:
+                inputs = inputs.unsqueeze(0)
+
+            if inputs.dim() == 2:
+                if inputs.shape[0] == 4 and inputs.is_floating_point():
+                    oh = inputs.unsqueeze(0)
+                    B = 1
+                else:
+                    B = inputs.shape[0]
+                    L = inputs.shape[1]
+                    oh = torch.zeros((B, L, 4), device=dev, dtype=torch.float32)
+                    valid = (inputs >= 0) & (inputs < 4)
+                    if valid.any():
+                        oh[valid] = F.one_hot(inputs[valid].long(), num_classes=4).float()
+                    oh = oh.permute(0, 2, 1)  # (B, 4, L)
+            elif inputs.dim() == 3:
+                B = inputs.shape[0]
+                if inputs.shape[1] == 4:
+                    oh = inputs.float()
+                elif inputs.shape[2] == 4:
+                    oh = inputs.permute(0, 2, 1).float()
+                elif inputs.shape[0] == 1:
+                    inputs = inputs.squeeze(0)
+                    B = inputs.shape[0]
+                    L = inputs.shape[1]
+                    oh = torch.zeros((B, L, 4), device=dev, dtype=torch.float32)
+                    valid = (inputs >= 0) & (inputs < 4)
+                    if valid.any():
+                        oh[valid] = F.one_hot(inputs[valid].long(), num_classes=4).float()
+                    oh = oh.permute(0, 2, 1)
+                else:
+                    raise ValueError(f"Unexpected 3D input shape: {inputs.shape}")
+            else:
+                raise ValueError(f"Unexpected input dimension: {inputs.dim()}")
+
+            if oh.shape[-1] < K:
+                batch_presence = np.zeros((B, len(motifs_list)), dtype=float)
+            else:
+                conv_res = F.conv1d(oh, kernels)  # (B, num_motifs, L - K + 1)
+                batch_presence = (conv_res >= (K - 1e-4)).any(dim=-1).cpu().numpy().astype(float)
+
+            presence_batches.append(batch_presence)
+            total_seqs += B
+            if total_seqs >= max_sequences:
+                break
+
+    if not presence_batches:
+        return np.empty((0, len(motifs_list)), dtype=float)
+
+    all_presence = np.concatenate(presence_batches, axis=0)
+    if len(all_presence) > max_sequences:
+        all_presence = all_presence[:max_sequences]
+
+    return all_presence
 
 
 def compute_jaccard_cooccurrence(
