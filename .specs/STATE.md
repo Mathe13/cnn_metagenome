@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r06-real-baselines-and-full-overlap-integration
-**Where**: Feature r06 implemented and all 6 proof checks passed. Ready for independent verification subagent dispatch.
-**In progress**: Independent verification of r06
-**Next step**: Run independent verifier on r06
+**Where**: Feature r06 verified complete by independent verification specialist. All 6 proof checks pass, strict verification validated with 0 errors/warnings, no open blockers.
+**In progress**: none
+**Next step**: Proceed to next roadmap item or feature planning
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
