@@ -1,11 +1,17 @@
 import json
+import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from viral_cnn.baselines.overlap import (
+    BenchmarkArtifacts,
+    load_prepared_baseline_benchmark,
+)
 
 
 class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
@@ -161,6 +167,207 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
         self.assertIn("overlap_queries", manifest)
         self.assertIn("methods_evaluated", manifest)
         self.assertEqual(manifest.get("bootstrap_repeats"), 2000)
+
+
+    def test_r06_load_prepared_baseline_benchmark_success(self):
+        """R06 C1: load_prepared_baseline_benchmark loads valid truth and prediction artifacts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            comp_path = tmp_path / "comparison_results"
+            comp_path.mkdir(parents=True)
+
+            qids = [f"q_{i:04d}" for i in range(20)]
+            labels = [i % 5 for i in range(20)]
+            train_counts = [2 if i < 15 else 0 for i in range(20)]
+            exact_overlap_df = pd.DataFrame({
+                "query_id": qids,
+                "label": labels,
+                "train_count": train_counts,
+                "has_overlap": [c > 0 for c in train_counts],
+            })
+            exact_overlap_df.to_csv(tmp_path / "exact_overlap.csv", index=False)
+
+            methods = [
+                "resnet50_species", "resnet_noise_species",
+                "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species",
+                "Kraken2-flat", "BLASTN"
+            ]
+            noise_levels = [0.0, 0.02, 0.05, 0.10, 0.15]
+
+            for m in methods:
+                for noise in noise_levels:
+                    tag = f"noise_{round(noise * 100):02d}"
+                    pred_df = pd.DataFrame({
+                        "query_id": qids,
+                        "prediction": labels,
+                        "top1": labels,
+                        "top2": [(l + 1) % 5 for l in labels],
+                        "top3": [(l + 2) % 5 for l in labels],
+                        "top4": [(l + 3) % 5 for l in labels],
+                        "top5": [(l + 4) % 5 for l in labels],
+                    })
+                    pred_df.to_parquet(comp_path / f"predictions_{m}_{tag}.parquet", index=False)
+
+            runtime_records = [{"method": "resnet50_species", "noise": 0.0, "seconds": 1.23, "n": 20}]
+            with (comp_path / "runtime.jsonl").open("w", encoding="utf-8") as f:
+                f.write(json.dumps(runtime_records[0]) + "\n")
+
+            artifacts = load_prepared_baseline_benchmark(tmp_path)
+            self.assertIsInstance(artifacts, BenchmarkArtifacts)
+            self.assertEqual(len(artifacts.audit_df), 20)
+            self.assertEqual(int(artifacts.strata_masks["overlap"].sum()), 15)
+            self.assertEqual(int(artifacts.strata_masks["no_exact_overlap"].sum()), 5)
+            self.assertEqual(set(artifacts.predictions.keys()), set(methods))
+            for m in methods:
+                for noise in noise_levels:
+                    self.assertEqual(len(artifacts.predictions[m][noise]), 20)
+                    self.assertIsNotNone(artifacts.top_candidates[m][noise])
+                    self.assertEqual(artifacts.top_candidates[m][noise].shape, (20, 5))
+            self.assertIsNotNone(artifacts.runtime)
+            self.assertEqual(len(artifacts.runtime), 1)
+
+    def test_r06_load_prepared_baseline_benchmark_validation_errors(self):
+        """R06 C2: load_prepared_baseline_benchmark detects duplicate or mismatched query_ids."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            comp_path = tmp_path / "comparison_results"
+            comp_path.mkdir(parents=True)
+
+            # Duplicate query_id in truth table
+            dup_truth_df = pd.DataFrame({
+                "query_id": ["q_01", "q_01"],
+                "label": [0, 1],
+                "train_count": [1, 0],
+            })
+            dup_truth_df.to_csv(tmp_path / "exact_overlap.csv", index=False)
+
+            with self.assertRaises(ValueError):
+                load_prepared_baseline_benchmark(tmp_path)
+
+            # Valid truth table
+            valid_truth_df = pd.DataFrame({
+                "query_id": ["q_01", "q_02"],
+                "label": [0, 1],
+                "train_count": [1, 0],
+            })
+            valid_truth_df.to_csv(tmp_path / "exact_overlap.csv", index=False)
+
+            # Duplicate query_id in prediction file
+            dup_pred_df = pd.DataFrame({
+                "query_id": ["q_01", "q_01"],
+                "prediction": [0, 1],
+            })
+            dup_pred_df.to_parquet(comp_path / "predictions_resnet50_species_noise_00.parquet", index=False)
+
+            with self.assertRaises(ValueError):
+                load_prepared_baseline_benchmark(tmp_path, methods=["resnet50_species"], noise_levels=[0.0])
+
+            # Mismatched query_ids
+            mismatch_pred_df = pd.DataFrame({
+                "query_id": ["q_01", "q_99"],
+                "prediction": [0, 1],
+            })
+            mismatch_pred_df.to_parquet(comp_path / "predictions_resnet50_species_noise_00.parquet", index=False)
+
+            with self.assertRaises(ValueError):
+                load_prepared_baseline_benchmark(tmp_path, methods=["resnet50_species"], noise_levels=[0.0])
+
+    def test_r06_load_prepared_baseline_benchmark_missing_dir(self):
+        """R06 C3: load_prepared_baseline_benchmark raises FileNotFoundError when directory or artifacts are missing."""
+        non_existent = Path("/non_existent_benchmark_directory_r06_xyz")
+        with self.assertRaises(FileNotFoundError):
+            load_prepared_baseline_benchmark(non_existent)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            # Empty directory without exact_overlap.csv
+            with self.assertRaises(FileNotFoundError):
+                load_prepared_baseline_benchmark(tmp_path)
+
+            # Directory with truth but missing predictions
+            valid_truth_df = pd.DataFrame({
+                "query_id": ["q_01"],
+                "label": [0],
+                "has_overlap": [True],
+            })
+            valid_truth_df.to_csv(tmp_path / "exact_overlap.csv", index=False)
+
+            with self.assertRaises(FileNotFoundError):
+                load_prepared_baseline_benchmark(tmp_path, methods=["resnet50_species"], noise_levels=[0.0])
+
+    def test_r06_notebook_09_fail_fast_outside_smoke(self):
+        """R06 C4: Notebook 09 raises FileNotFoundError when is_smoke_test=False and kraken_blast_dir does not exist."""
+        nb_path = Path("notebooks/reproduction/short/09_benchmark_cnns_kraken2_blast_overlap.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        # Execute Cell 1 and Cell 3 with is_smoke_test = False and a non-existent kraken_blast_dir
+        c1_code = "".join(nb["cells"][1]["source"])
+        c3_code = "".join(nb["cells"][3]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        exec(c1_code, global_ns)
+        # Override runtime context
+        global_ns["ctx"].is_smoke_test = False
+        global_ns["ctx"].topology.paths["short"]["kraken_blast_dir"] = "/non_existent_cluster_kraken_blast_dir"
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c3_code, global_ns)
+
+    def test_r06_notebook_09_no_synthetic_fabrication_outside_smoke(self):
+        """R06 C5: Notebook 09 does not execute random prediction generation when is_smoke_test=False."""
+        nb_path = Path("notebooks/reproduction/short/09_benchmark_cnns_kraken2_blast_overlap.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c5_code = "".join(nb["cells"][5]["source"])
+        # Check that acc_target and rng.uniform are strictly inside ctx.is_smoke_test branch
+        self.assertIn("if ctx.is_smoke_test:", c5_code)
+        self.assertIn("benchmark_artifacts.predictions", c5_code)
+
+        parts = c5_code.split("\nelse:")
+        self.assertGreater(len(parts), 1, "Cell 5 must contain an outer else branch for non-smoke execution")
+        non_smoke_branch = parts[1]
+        self.assertNotIn("acc_target", non_smoke_branch)
+        self.assertNotIn("rng.uniform", non_smoke_branch)
+
+    def test_r06_notebook_09_smoke_execution_and_exports(self):
+        """R06 C6: Notebook 09 executes end-to-end in smoke mode in <60s, producing 40 queries and all exports."""
+        nb_path = Path("notebooks/reproduction/short/09_benchmark_cnns_kraken2_blast_overlap.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        start_time = time.time()
+        global_ns = {"__name__": "__main__"}
+        for idx, cell in enumerate(nb["cells"]):
+            if cell.get("cell_type") == "code":
+                code = "".join(cell.get("source", []))
+                try:
+                    exec(code, global_ns)
+                except Exception as e:
+                    self.fail(f"Cell {idx} raised exception in smoke test: {e}")
+
+        duration = time.time() - start_time
+        self.assertLess(duration, 60.0, f"Notebook 09 took {duration:.2f}s (>60s)")
+
+        # Verify exports
+        base_dir = Path("results_reproduction/baselines")
+        self.assertTrue((base_dir / "exact_overlap_audit.csv").exists())
+        self.assertTrue((base_dir / "benchmark_metrics_stratified.csv").exists())
+        self.assertTrue((base_dir / "paired_discordance.csv").exists())
+        self.assertTrue((base_dir / "species_cluster_bootstrap.csv").exists())
+        self.assertTrue((base_dir / "figure_benchmark_overlap.png").exists())
+        self.assertTrue((base_dir / "manifest_09_baselines.json").exists())
+
+        audit_df = pd.read_csv(base_dir / "exact_overlap_audit.csv")
+        self.assertEqual(len(audit_df), 40)
+        self.assertEqual(int(audit_df["has_overlap"].sum()), 20)
+
+        with open(base_dir / "manifest_09_baselines.json") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["total_queries"], 40)
+        self.assertEqual(manifest["overlap_queries"], 20)
+        self.assertEqual(manifest["bootstrap_repeats"], 2000)
 
 
 if __name__ == "__main__":

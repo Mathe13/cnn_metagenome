@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r05-real-motif-jaccard-and-triplet-analysis
-**Where**: Feature r05 verified and complete; all 6 checks passed with independent verification gate exiting 0. Ready for next feature in roadmap or user sign-off.
-**In progress**: none
-**Next step**: User sign-off or next roadmap feature
+**Feature**: r06-real-baselines-and-full-overlap-integration
+**Where**: Feature r06 implemented and all 6 proof checks passed. Ready for independent verification subagent dispatch.
+**In progress**: Independent verification of r06
+**Next step**: Run independent verifier on r06
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
