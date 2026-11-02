@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r08-dynamic-paper-tables-and-manuscript-reconciliation
-**Where**: Implementation completed. Proof checks C1-C6 implemented in `tests/test_r08_reconciliation_and_tables.py` and passing. Ready for commit and independent verification.
-**In progress**: Independent verification of R08
-**Next step**: Run independent verification subagent
+**Where**: Feature complete. Independently verified across all proof checks C1-C6 (`tests/test_r08_reconciliation_and_tables.py` and `tests/test_manuscript_compilation.py`), with verification.md validated under strict profile rules (0 errors, 0 warnings).
+**In progress**: none - feature verified complete
+**Next step**: All roadmap audit specs (S01-S12, N01-N07, N09, R01-R08) complete
 **Blockers**: none
-**Uncommitted**: Implementation changes across tables.py, manuscript.py, controlled_audit.py, paper sources, and test_r08
+**Uncommitted**: none
 **Branch**: main
