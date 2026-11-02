@@ -1,0 +1,6 @@
+model,acc_mean_logits,acc_majority_vote,notes
+ResNet50_1D (Clean),0.7269,0.6912,Melhor desempenho sob genomas de referência conhecidos
+ResNet50_1D (Noise FT),0.7185,0.684,"Robusto a ruído, pequeno trade-off no limpo"
+ConvNeXt_Z (Scratch),0.1201,0.145,Queda severa em leituras longas
+ConvNeXt_T (Transfer),0.0349,0.052,Colapso extremo por perda de calibração pré-softmax
+ConvNeXt_F (Noise FT),0.1999,0.2038,Recuperação parcial via fine-tuning com ruído

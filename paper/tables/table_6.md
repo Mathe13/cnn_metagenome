@@ -1,0 +1,12 @@
+| Model | Transition | Pearson_r | Spearman_rho | N_taxa |
+| --- | --- | --- | --- | --- |
+| ResNet50 | Species -> Genus | -0.0762421931991041 | -0.1064814814814814 | 10 |
+| ResNet50 | Genus -> Order | 0.9976782168718148 | 1.0 | 3 |
+| ResNet50_F | Species -> Genus | 0.8231810888766841 | 0.8861469461982083 | 10 |
+| ResNet50_F | Genus -> Order | 0.983383616392552 | 0.5 | 3 |
+| ConvNeXt_Z | Species -> Genus | -0.0687855355592827 | -0.0077183841617832 | 10 |
+| ConvNeXt_Z | Genus -> Order | 0.9171402601159424 | 1.0 | 3 |
+| ConvNeXt_T | Species -> Genus | 0.287819590772688 | 0.523379149871343 | 10 |
+| ConvNeXt_T | Genus -> Order | 0.9952148692216832 | 0.8660254037844387 | 3 |
+| ConvNeXt_F | Species -> Genus | 0.049505946958912 | 0.0900528555991967 | 10 |
+| ConvNeXt_F | Genus -> Order | 0.9986531916026982 | 1.0 | 3 |

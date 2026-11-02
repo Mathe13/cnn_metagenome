@@ -1,0 +1,14 @@
+| table_id | table_name | artifact_source | empirical_status | notes |
+| --- | --- | --- | --- | --- |
+| 1 | Comparative performance metrics on clean fragments | src/viral_cnn/reporting/tables.py:generate_table_1_metrics | RECONCILED_PARAMETERS | Reconciled to 1D architectures: ResNet50 Species=43.99M, Genus=21.49M; ConvNeXt Species=164.01M, Genus=141.51M. |
+| 2 | Inference efficiency profiling | src/viral_cnn/reporting/tables.py:generate_table_2_profiling | RECONCILED_PARAMETERS | Reconciled to 1D architectures: ResNet50 Species=43.99M, ConvNeXt Species=164.01M. |
+| 3 | Single-window accuracy degradation under noise | src/viral_cnn/reporting/tables.py:generate_table_3_noise_degradation | MATCH | Single-window evaluations evaluated with N=1,706,270 strict denominator. |
+| 4 | Species-level performance distribution and pairwise superiority | results_reproduction/n02_benchmark/table4_f1_bands.csv | DYNAMIC_ARTIFACT_LOADED | Species-level pairwise analysis: ConvNeXt superior in 11,826, ResNet50 in 1,202, 5 ties (N=13,033). |
+| 5 | Global latent-space organization across taxonomic levels | results_reproduction/latent_space/table5_latent_clustering_metrics.csv | DYNAMIC_ARTIFACT_LOADED | Global latent clustering with cosine KNN (k=5) and Silhouette coefficients. |
+| 6 | Hierarchical correspondence across adjacent taxonomic levels | results_reproduction/latent_space/table6_taxonomic_rank_correlations.csv | DYNAMIC_ARTIFACT_LOADED | Taxonomic rank correspondence across adjacent levels (Order-Genus, Genus-Species). |
+| 7 | Hierarchical predictive entropy and normalized activation | results_reproduction/n02_calibration/table7_hierarchical_entropy.csv | DYNAMIC_ARTIFACT_LOADED | Hierarchical predictive entropy across Species rank. |
+| 8 | Summary of statistically validated first-layer motifs | results_reproduction/motifs/table_08_motif_perturbation.csv | DYNAMIC_ARTIFACT_LOADED | First-layer 7-mer motif perturbation with paired GC/complexity controls. |
+| 9 | Correlation between RSCU profile and motif triplet distribution | results_reproduction/motifs/table_09_exploratory_rscu.csv | DYNAMIC_ARTIFACT_LOADED | Spearman rank correlation against host RSCU codon usage profiles. |
+| 10 | Prevalence of translation boundary signals among motifs | results_reproduction/motifs/table_10_translation_boundary_signals.csv | DYNAMIC_ARTIFACT_LOADED | Prevalence of translation boundary signals (ATG/stop) with exploratory notice. |
+| 11 | Inter-architecture motif triplet correlation pairs | results_reproduction/motifs/table_11_cooccurrence_synergy.csv | DYNAMIC_ARTIFACT_LOADED | Inter-architecture motif correlation pairs with Benjamini-Hochberg FDR. |
+| 12 | Long-sequence sliding-window Voter consensus performance | results_reproduction/long_voter/table_12_long_voter_comparison.csv | DYNAMIC_ARTIFACT_LOADED | Sliding-window voter consensus on NCBI long contigs. |

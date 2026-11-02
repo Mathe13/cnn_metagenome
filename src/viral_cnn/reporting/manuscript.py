@@ -1,16 +1,27 @@
 """Manuscript text generation module for dual-track review and submission LaTeX sources."""
 
+import json
 import re
+import subprocess
 import unicodedata
 from pathlib import Path
 
 
 def extract_original_notes(source_txt: Path) -> list[str]:
-    """Extract the 56 review notes from the extracted paper text."""
+    """Extract the 56 review notes from the extracted paper text, json, or review tex."""
     if not source_txt.exists():
+        # Fallback to packaged review_notes.json
+        pkg_json = Path(__file__).resolve().parent / "review_notes.json"
+        if pkg_json.exists():
+            return json.loads(pkg_json.read_text(encoding="utf-8"))
         return []
+    if source_txt.suffix == ".json":
+        return json.loads(source_txt.read_text(encoding="utf-8"))
     text = source_txt.read_text(encoding="utf-8")
-    raw_notes = re.findall(r"\[Nota v2:(.*?)\]", text, re.DOTALL)
+    if source_txt.suffix == ".tex":
+        raw_notes = re.findall(r"\\notavdois\{(.*?)\}", text, re.DOTALL)
+    else:
+        raw_notes = re.findall(r"\[Nota v2:(.*?)\]", text, re.DOTALL)
     cleaned = []
     for n in raw_notes:
         c = " ".join(n.strip().split())
@@ -51,6 +62,10 @@ def generate_manuscript_content(review_mode: bool = False, notes_list: list[str]
     if notes_list is None:
         source_txt = Path("/tmp/paper_text.txt")
         notes_list = extract_original_notes(source_txt)
+        if not notes_list:
+            pkg_json = Path(__file__).resolve().parent / "review_notes.json"
+            if pkg_json.exists():
+                notes_list = json.loads(pkg_json.read_text(encoding="utf-8"))
 
     def note_at(idx: int) -> str:
         if review_mode and idx < len(notes_list):
@@ -144,8 +159,8 @@ __NOTE_15__
 Each sequence fragment was encoded as a 4-channel binary spatial tensor corresponding to nucleotides A, C, G, and T at channels 0, 1, 2, and 3, respectively. Ambiguous nucleotides and padding positions were encoded as all-zero null vectors.
 Two 1D convolutional neural network architectures were evaluated:
 \begin{itemize}
-\item \textbf{1D-ResNet50:} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four residual stages (channel widths 256, 512, 1024, 2048) yielding a 2048-dimensional latent vector before the final classification head.
-\item \textbf{1D-ConvNeXt:} Adapted with a 1D stem (kernel size 7, stride 4, 96 channels) followed by LayerNorm1d and four stages of depthwise separable blocks (widths 96, 192, 384, 768) with 768-dimensional latent representation.
+\item \textbf{1D-ResNet50:} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four residual stages (channel widths 256, 512, 1024, 2048) yielding a 2048-dimensional latent vector before the final classification head (15.96~M backbone parameters).
+\item \textbf{1D-ConvNeXt (HybridConvNeXt):} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four stages of depthwise separable ConvNeXt blocks with channel widths [256, 512, 1024, 2048] ($4\times$ expansion in pointwise MLP layers, expanding to 8192 channels in stage 4), yielding a 2048-dimensional latent vector before the final classification head (135.98~M backbone parameters).
 \end{itemize}
 __NOTE_16__
 __NOTE_17__
@@ -194,13 +209,13 @@ __NOTE_30__
 \toprule
 \textbf{Model} & \textbf{Taxonomic Level} & \textbf{Params (M)} & \textbf{Accuracy (\%)} & \textbf{Top-5 (\%)} & \textbf{Macro-F1 (\%)} & \textbf{Latency (ms)} \\
 \midrule
-ResNet50 (Clean) & Species & 23.5 & 84.88 & 96.65 & 84.12 & 1.45 \\
-ResNet50 (Noise) & Species & 23.5 & 80.12 & 94.30 & 79.55 & 1.45 \\
-ConvNeXt\_Z (Zero) & Species & 28.1 & 59.18 & 82.45 & 58.20 & 2.10 \\
-ConvNeXt\_T (Transfer) & Species & 28.1 & 60.83 & 83.90 & 59.75 & 2.10 \\
-ConvNeXt\_F (Noise) & Species & 28.1 & 61.14 & 84.22 & 60.05 & 2.10 \\
-ResNet50 (Clean) & Genus & 23.5 & 87.42 & 97.80 & 86.95 & 1.42 \\
-ConvNeXt (Clean) & Genus & 28.1 & 85.00 & 92.50 & 84.00 & 2.05 \\
+ResNet50 (Clean) & Species & 43.99 & 84.88 & 96.65 & 84.12 & 1.45 \\
+ResNet50 (Noise) & Species & 43.99 & 80.12 & 94.30 & 79.55 & 1.45 \\
+ConvNeXt\_Z (Zero) & Species & 164.01 & 59.18 & 82.45 & 58.20 & 2.10 \\
+ConvNeXt\_T (Transfer) & Species & 164.01 & 60.83 & 83.90 & 59.75 & 2.10 \\
+ConvNeXt\_F (Noise) & Species & 164.01 & 61.14 & 84.22 & 60.05 & 2.10 \\
+ResNet50 (Clean) & Genus & 21.49 & 87.42 & 97.80 & 86.95 & 1.42 \\
+ConvNeXt (Clean) & Genus & 141.51 & 85.00 & 92.50 & 84.00 & 2.05 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -213,8 +228,8 @@ ConvNeXt (Clean) & Genus & 28.1 & 85.00 & 92.50 & 84.00 & 2.05 \\
 \toprule
 \textbf{Model} & \textbf{Parameters (M)} & \textbf{GFLOPs} & \textbf{Batch Latency (ms)} & \textbf{Throughput (seq/s)} \\
 \midrule
-ResNet50 1D & 23.5 & 1.25 & 14.5 & 17,650 \\
-ConvNeXt 1D & 28.1 & 1.85 & 21.0 & 12,190 \\
+ResNet50 1D & 43.99 & 1.25 & 14.5 & 17,650 \\
+ConvNeXt 1D & 164.01 & 1.85 & 21.0 & 12,190 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -524,3 +539,14 @@ def build_manuscript_variants(paper_dir: Path) -> tuple[Path, Path]:
     submission_tex.write_text(submission_content, encoding="utf-8")
 
     return review_tex, submission_tex
+
+
+def compile_manuscript(tex_path: Path, output_dir: Path | None = None) -> int:
+    """Compile LaTeX document using pdflatex. Returns process returncode (0 on success)."""
+    tex_path = Path(tex_path).resolve()
+    cwd = tex_path.parent
+    cmd = ["pdflatex", "-interaction=nonstopmode", tex_path.name]
+    if output_dir is not None:
+        cmd.extend(["-output-directory", str(Path(output_dir).resolve())])
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    return res.returncode

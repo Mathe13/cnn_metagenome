@@ -84,8 +84,8 @@ Contigs shorter than 512 bp ($M < W$) were handled via end-padding with null vec
 Each sequence fragment was encoded as a 4-channel binary spatial tensor corresponding to nucleotides A, C, G, and T at channels 0, 1, 2, and 3, respectively. Ambiguous nucleotides and padding positions were encoded as all-zero null vectors.
 Two 1D convolutional neural network architectures were evaluated:
 \begin{itemize}
-\item \textbf{1D-ResNet50:} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four residual stages (channel widths 256, 512, 1024, 2048) yielding a 2048-dimensional latent vector before the final classification head.
-\item \textbf{1D-ConvNeXt:} Adapted with a 1D stem (kernel size 7, stride 4, 96 channels) followed by LayerNorm1d and four stages of depthwise separable blocks (widths 96, 192, 384, 768) with 768-dimensional latent representation.
+\item \textbf{1D-ResNet50:} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four residual stages (channel widths 256, 512, 1024, 2048) yielding a 2048-dimensional latent vector before the final classification head (15.96~M backbone parameters).
+\item \textbf{1D-ConvNeXt (HybridConvNeXt):} Adapted with a 1D convolutional stem (kernel size 7, stride 2, 64 channels) followed by BatchNorm, ReLU, and MaxPool, and four stages of depthwise separable ConvNeXt blocks with channel widths [256, 512, 1024, 2048] ($4\times$ expansion in pointwise MLP layers, expanding to 8192 channels in stage 4), yielding a 2048-dimensional latent vector before the final classification head (135.98~M backbone parameters).
 \end{itemize}
 
 
@@ -134,13 +134,13 @@ Inference efficiency profiling is reported in Table~2.
 \toprule
 \textbf{Model} & \textbf{Taxonomic Level} & \textbf{Params (M)} & \textbf{Accuracy (\%)} & \textbf{Top-5 (\%)} & \textbf{Macro-F1 (\%)} & \textbf{Latency (ms)} \\
 \midrule
-ResNet50 (Clean) & Species & 23.5 & 84.88 & 96.65 & 84.12 & 1.45 \\
-ResNet50 (Noise) & Species & 23.5 & 80.12 & 94.30 & 79.55 & 1.45 \\
-ConvNeXt\_Z (Zero) & Species & 28.1 & 59.18 & 82.45 & 58.20 & 2.10 \\
-ConvNeXt\_T (Transfer) & Species & 28.1 & 60.83 & 83.90 & 59.75 & 2.10 \\
-ConvNeXt\_F (Noise) & Species & 28.1 & 61.14 & 84.22 & 60.05 & 2.10 \\
-ResNet50 (Clean) & Genus & 23.5 & 87.42 & 97.80 & 86.95 & 1.42 \\
-ConvNeXt (Clean) & Genus & 28.1 & 85.00 & 92.50 & 84.00 & 2.05 \\
+ResNet50 (Clean) & Species & 43.99 & 84.88 & 96.65 & 84.12 & 1.45 \\
+ResNet50 (Noise) & Species & 43.99 & 80.12 & 94.30 & 79.55 & 1.45 \\
+ConvNeXt\_Z (Zero) & Species & 164.01 & 59.18 & 82.45 & 58.20 & 2.10 \\
+ConvNeXt\_T (Transfer) & Species & 164.01 & 60.83 & 83.90 & 59.75 & 2.10 \\
+ConvNeXt\_F (Noise) & Species & 164.01 & 61.14 & 84.22 & 60.05 & 2.10 \\
+ResNet50 (Clean) & Genus & 21.49 & 87.42 & 97.80 & 86.95 & 1.42 \\
+ConvNeXt (Clean) & Genus & 141.51 & 85.00 & 92.50 & 84.00 & 2.05 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -153,8 +153,8 @@ ConvNeXt (Clean) & Genus & 28.1 & 85.00 & 92.50 & 84.00 & 2.05 \\
 \toprule
 \textbf{Model} & \textbf{Parameters (M)} & \textbf{GFLOPs} & \textbf{Batch Latency (ms)} & \textbf{Throughput (seq/s)} \\
 \midrule
-ResNet50 1D & 23.5 & 1.25 & 14.5 & 17,650 \\
-ConvNeXt 1D & 28.1 & 1.85 & 21.0 & 12,190 \\
+ResNet50 1D & 43.99 & 1.25 & 14.5 & 17,650 \\
+ConvNeXt 1D & 164.01 & 1.85 & 21.0 & 12,190 \\
 \bottomrule
 \end{tabular}
 \end{table}

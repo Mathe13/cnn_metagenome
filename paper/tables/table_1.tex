@@ -1,0 +1,13 @@
+\begin{tabular}{llrrrrrrr}
+\toprule
+model & taxonomic_level & backbone_m & fc_params_m & parameters_m & accuracy & top_5 & macro_f1 & latency_ms \\
+\midrule
+ResNet50 (Species, Clean) & Species & 15.960000 & 28.040000 & 43.990000 & 84.880000 & 96.650000 & 84.120000 & 1.450000 \\
+ResNet50 (Species, Noise Fine-tuned) & Species & 15.960000 & 28.040000 & 43.990000 & 80.120000 & 94.300000 & 79.550000 & 1.450000 \\
+ConvNeXt_Z (Species, Zero) & Species & 135.980000 & 28.040000 & 164.010000 & 59.180000 & 82.450000 & 58.200000 & 2.100000 \\
+ConvNeXt_T (Species, Transfer) & Species & 135.980000 & 28.040000 & 164.010000 & 60.830000 & 83.900000 & 59.750000 & 2.100000 \\
+ConvNeXt_F (Species, Noise Fine-tuned) & Species & 135.980000 & 28.040000 & 164.010000 & 61.140000 & 84.220000 & 60.050000 & 2.100000 \\
+ResNet50 (Genus, Clean) & Genus & 15.960000 & 5.540000 & 21.490000 & 87.420000 & 97.800000 & 86.950000 & 1.420000 \\
+ConvNeXt (Genus, Clean) & Genus & 135.980000 & 5.540000 & 141.510000 & 85.000000 & 92.500000 & 84.000000 & 2.050000 \\
+\bottomrule
+\end{tabular}

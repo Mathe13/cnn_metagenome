@@ -39,9 +39,9 @@ def generate_controlled_experiment_report(
                 pass
 
     # Baseline theoretical cost estimates for full closed-set training (13,683 classes)
-    # ResNet50: ~23.5M params, ConvNeXt-Tiny: ~28.1M params
-    resnet_params = "23,541,515"
-    convnext_params = "28,142,603"
+    # ResNet50 1D: ~43.99M params, ConvNeXt-Tiny 1D (HybridConvNeXt): ~164.01M params
+    resnet_params = "43,992,051"
+    convnext_params = "164,013,811"
     
     # Sequence throughput and VRAM on NVIDIA RTX GPU
     resnet_throughput = 17650  # seq/s

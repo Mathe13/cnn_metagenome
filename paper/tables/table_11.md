@@ -1,0 +1,3 @@
+| r_canonical | r_reversed | delta_r_orientation | icc_symmetric | r_bidirectional | p_permutation_null |
+| --- | --- | --- | --- | --- | --- |
+| 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 |

@@ -25,10 +25,10 @@
 
 ## Handoff
 
-**Feature**: r07-real-long-sequence-voter-and-ncbi-audit
-**Where**: Feature r07 verified complete by independent verification specialist. All 6 proof checks pass, strict verification validated with 0 errors/warnings, no open blockers.
-**In progress**: none
-**Next step**: Proceed to next roadmap item or feature planning
+**Feature**: r08-dynamic-paper-tables-and-manuscript-reconciliation
+**Where**: Implementation completed. Proof checks C1-C6 implemented in `tests/test_r08_reconciliation_and_tables.py` and passing. Ready for commit and independent verification.
+**In progress**: Independent verification of R08
+**Next step**: Run independent verification subagent
 **Blockers**: none
-**Uncommitted**: none
+**Uncommitted**: Implementation changes across tables.py, manuscript.py, controlled_audit.py, paper sources, and test_r08
 **Branch**: main

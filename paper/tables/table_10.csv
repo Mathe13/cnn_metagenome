@@ -1,0 +1,5 @@
+signal,codon,observed_count,expected_count,fold_enrichment,null_probability
+start_atg,ATG,0.0,0.16,0.0,0.0156
+stop_taa,TAA,0.0,0.16,0.0,0.0156
+stop_tag,TAG,0.0,0.16,0.0,0.0156
+stop_tga,TGA,0.0,0.16,0.0,0.0156
