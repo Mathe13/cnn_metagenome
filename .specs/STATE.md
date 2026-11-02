@@ -26,9 +26,9 @@
 ## Handoff
 
 **Feature**: r07-real-long-sequence-voter-and-ncbi-audit
-**Where**: Feature r07 implemented and all 6 proof checks passed. Ready for independent verification subagent dispatch.
-**In progress**: Independent verification of r07
-**Next step**: Run independent verifier on r07
+**Where**: Feature r07 verified complete by independent verification specialist. All 6 proof checks pass, strict verification validated with 0 errors/warnings, no open blockers.
+**In progress**: none
+**Next step**: Proceed to next roadmap item or feature planning
 **Blockers**: none
 **Uncommitted**: none
 **Branch**: main
