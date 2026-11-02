@@ -409,9 +409,9 @@ If you use this codebase, models, or methodology in your research, please cite:
 @article{lima2026viralcnn,
   title={Base-level one-hot 1D convolutional networks for high-cardinality viral taxonomic classification: accuracy, corruption trade-offs, and learned sequence representations},
   author={de Lima, Matheus and da Rocha, Ulisses Nunes and Dorn, M{\'a}rcio},
-  journal={BioData Mining},
-  year={2026},
-  publisher={BioMed Central}
+  journal={},
+  year={},
+  publisher={}
 }
 ```
 
