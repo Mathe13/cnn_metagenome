@@ -1,10 +1,13 @@
 import json
+import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
 
 import pandas as pd
+from viral_cnn.notebook_runtime import JupyterHubDataTopology
 
 
 class TestN07LongSequenceVoter(unittest.TestCase):
@@ -279,6 +282,173 @@ class TestN07LongSequenceVoter(unittest.TestCase):
             check=True,
         )
         self.assertEqual(res.stdout.strip(), "", "Historical notebook long/long_loss_function.ipynb was modified!")
+
+
+    # --------------------------------------------------------------------------
+    # R07 Spec Verification Checks (C1 - C6)
+    # --------------------------------------------------------------------------
+    def test_r07_resolve_long_artifact_path(self):
+        """R07 C1: JupyterHubDataTopology.resolve_long_artifact_path searches candidate directories."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            top = JupyterHubDataTopology(data_root=root)
+
+            # Test artifact directly in root
+            (root / "taxonomia_recuperada.csv").touch()
+            res_tax = top.resolve_long_artifact_path("taxonomia_recuperada.csv")
+            self.assertIsNotNone(res_tax)
+            self.assertEqual(res_tax, root / "taxonomia_recuperada.csv")
+
+            # Test artifact in root/long
+            (root / "long").mkdir(parents=True)
+            (root / "long" / "mapping_species_final.csv").touch()
+            res_map = top.resolve_long_artifact_path("mapping_species_final.csv")
+            self.assertIsNotNone(res_map)
+            self.assertEqual(res_map, root / "long" / "mapping_species_final.csv")
+
+            # Test artifact in root/cnn_long
+            (root / "cnn_long").mkdir(parents=True)
+            (root / "cnn_long" / "processed_ncbi_splited_parquet").mkdir(parents=True)
+            res_ncbi = top.resolve_long_artifact_path("processed_ncbi_splited_parquet")
+            self.assertIsNotNone(res_ncbi)
+            self.assertEqual(res_ncbi, root / "cnn_long" / "processed_ncbi_splited_parquet")
+
+            # Test artifact in root/cnn_kraken
+            (root / "cnn_kraken").mkdir(parents=True)
+            (root / "cnn_kraken" / "resultados_inferencia_long_reads_ResNet50.parquet").touch()
+            res_inf = top.resolve_long_artifact_path("resultados_inferencia_long_reads_ResNet50.parquet")
+            self.assertIsNotNone(res_inf)
+            self.assertEqual(res_inf, root / "cnn_kraken" / "resultados_inferencia_long_reads_ResNet50.parquet")
+
+            # Non-existent artifact returns None
+            self.assertIsNone(top.resolve_long_artifact_path("non_existent_file_xyz.csv"))
+
+    def test_r07_notebook_01_fail_fast_outside_smoke(self):
+        """R07 C2: long/01 raises FileNotFoundError when is_smoke_test=False and ncbi_parquet_dir is missing."""
+        nb_path = Path("notebooks/reproduction/long/01_ncbi_download_and_prepare_database.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c1_code = "".join(nb["cells"][1]["source"])
+        c3_code = "".join(nb["cells"][3]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        exec(c1_code, global_ns)
+        global_ns["ctx"].is_smoke_test = False
+        global_ns["ctx"].topology.paths["long"]["ncbi_parquet_dir"] = "/non_existent_ncbi_parquet_dir_xyz"
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c3_code, global_ns)
+
+    def test_r07_notebook_02_fail_fast_outside_smoke(self):
+        """R07 C3: long/02 raises FileNotFoundError when is_smoke_test=False and checkpoints are missing."""
+        nb_path = Path("notebooks/reproduction/long/02_cnn_long_voter_inference.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c1_code = "".join(nb["cells"][1]["source"])
+        c3_code = "".join(nb["cells"][3]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        exec(c1_code, global_ns)
+        global_ns["ctx"].is_smoke_test = False
+        global_ns["ctx"].topology.paths["checkpoints"]["resnet_clean_species"] = "/non_existent_checkpoint_xyz"
+        global_ns["ctx"].topology.paths["long"]["ncbi_parquet_dir"] = "/non_existent_ncbi_dir_xyz"
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c3_code, global_ns)
+
+        # Check that MockVoterModel is strictly inside the smoke test branch
+        parts = c3_code.split("else:")
+        self.assertGreater(len(parts), 1)
+        non_smoke_branch = parts[1]
+        self.assertNotIn("MockVoterModel", non_smoke_branch)
+
+    def test_r07_notebook_03_dynamic_table_12_and_fail_fast(self):
+        """R07 C4: long/03 computes Table 12 dynamically and raises FileNotFoundError outside smoke mode if missing."""
+        nb_path = Path("notebooks/reproduction/long/03_cnn_long_voter_compare.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c1_code = "".join(nb["cells"][1]["source"])
+        c3_code = "".join(nb["cells"][3]["source"])
+        c5_code = "".join(nb["cells"][5]["source"])
+
+        # Check that hardcoded table_12_data literal is removed from cell 3
+        self.assertNotIn("table_12_data = [", c3_code)
+
+        global_ns = {"__name__": "__main__"}
+        exec(c1_code, global_ns)
+        global_ns["ctx"].is_smoke_test = False
+        global_ns["ctx"].topology.root = Path("/non_existent_root_dir_xyz")
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c3_code, global_ns)
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c5_code, global_ns)
+
+    def test_r07_notebook_04_fail_fast_outside_smoke(self):
+        """R07 C5: long/04 raises FileNotFoundError when is_smoke_test=False and contigs are missing."""
+        nb_path = Path("notebooks/reproduction/long/04_long_motifs_and_gc_analysis.ipynb")
+        with open(nb_path, "r", encoding="utf-8") as f:
+            nb = json.load(f)
+
+        c1_code = "".join(nb["cells"][1]["source"])
+        c3_code = "".join(nb["cells"][3]["source"])
+
+        global_ns = {"__name__": "__main__"}
+        exec(c1_code, global_ns)
+        global_ns["ctx"].is_smoke_test = False
+        global_ns["ctx"].topology.paths["long"]["ncbi_parquet_dir"] = "/non_existent_ncbi_parquet_dir_xyz"
+
+        with self.assertRaises(FileNotFoundError):
+            exec(c3_code, global_ns)
+
+    def test_r07_smoke_execution_all_long_notebooks(self):
+        """R07 C6: All 4 long notebooks execute under SMOKE_TEST=1 in <60s each with Table 12 and motifs verified."""
+        notebooks = [
+            "01_ncbi_download_and_prepare_database.ipynb",
+            "02_cnn_long_voter_inference.ipynb",
+            "03_cnn_long_voter_compare.ipynb",
+            "04_long_motifs_and_gc_analysis.ipynb",
+        ]
+
+        for nb_name in notebooks:
+            nb_path = Path(f"notebooks/reproduction/long/{nb_name}")
+            self.assertTrue(nb_path.exists())
+            with open(nb_path, "r", encoding="utf-8") as f:
+                nb = json.load(f)
+
+            start_time = time.time()
+            global_ns = {"__name__": "__main__"}
+            for idx, cell in enumerate(nb["cells"]):
+                if cell.get("cell_type") == "code":
+                    code = "".join(cell.get("source", []))
+                    try:
+                        exec(code, global_ns)
+                    except Exception as e:
+                        self.fail(f"Cell {idx} of {nb_name} raised: {e}")
+            elapsed = time.time() - start_time
+            self.assertLess(elapsed, 60.0, f"{nb_name} exceeded 60s limit: {elapsed:.2f}s")
+
+        # Verify Table 12 values in table_12_long_voter_comparison.csv
+        t12_csv = Path("results_reproduction/long_voter/table_12_long_voter_comparison.csv")
+        self.assertTrue(t12_csv.exists())
+        df_t12 = pd.read_csv(t12_csv)
+        resnet_acc = df_t12[df_t12["model"].str.contains("ResNet50_1D \\(Clean\\)")]["acc_mean_logits"].values[0]
+        convnext_t_acc = df_t12[df_t12["model"].str.contains("ConvNeXt_T")]["acc_mean_logits"].values[0]
+        self.assertAlmostEqual(resnet_acc, 0.7269, places=3)
+        self.assertAlmostEqual(convnext_t_acc, 0.0349, places=3)
+
+        # Verify motifs detected (> 0) in long_contig_motif_summary.csv
+        motif_csv = Path("results_reproduction/long_voter/long_contig_motif_summary.csv")
+        self.assertTrue(motif_csv.exists())
+        df_motifs = pd.read_csv(motif_csv)
+        motif_cols = [c for c in df_motifs.columns if c.startswith("motif_")]
+        self.assertGreater(len(motif_cols), 0)
+        total_motifs = df_motifs[motif_cols].to_numpy().sum()
+        self.assertGreater(total_motifs, 0, "Tracked motifs should be present in the contig")
 
 
 if __name__ == "__main__":

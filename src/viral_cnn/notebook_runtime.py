@@ -80,12 +80,31 @@ class JupyterHubDataTopology:
                 "hybrid_taxonomy_parquet": str(self.root / "short" / "main_taxonomy_hybrid_CLEANSED.parquet"),
             },
             "long": {
-                "ncbi_parquet_dir": str(self.root / "processed_ncbi_splited_parquet"),
-                "mapping_species_final": str(self.root / "mapping_species_final.csv"),
-                "mapping_genus_final": str(self.root / "mapping_genus_final.csv"),
-                "raw_database_final": str(self.root / "raw_database" / "final.csv"),
-                "synthetic_reads": str(self.root / "dataset_reads_sinteticos_CLEAN.parquet"),
-                "taxonomy_recovered": str(self.root / "taxonomia_recuperada.csv"),
+                "ncbi_parquet_dir": str(
+                    self.resolve_long_artifact_path("processed_ncbi_splited_parquet")
+                    or (self.root / "processed_ncbi_splited_parquet")
+                ),
+                "mapping_species_final": str(
+                    self.resolve_long_artifact_path("mapping_species_final.csv")
+                    or (self.root / "mapping_species_final.csv")
+                ),
+                "mapping_genus_final": str(
+                    self.resolve_long_artifact_path("mapping_genus_final.csv")
+                    or (self.root / "mapping_genus_final.csv")
+                ),
+                "raw_database_final": str(
+                    self.resolve_long_artifact_path("raw_database/final.csv")
+                    or self.resolve_long_artifact_path("final.csv")
+                    or (self.root / "raw_database" / "final.csv")
+                ),
+                "synthetic_reads": str(
+                    self.resolve_long_artifact_path("dataset_reads_sinteticos_CLEAN.parquet")
+                    or (self.root / "dataset_reads_sinteticos_CLEAN.parquet")
+                ),
+                "taxonomy_recovered": str(
+                    self.resolve_long_artifact_path("taxonomia_recuperada.csv")
+                    or (self.root / "taxonomia_recuperada.csv")
+                ),
             },
             "checkpoints": {},
         }
@@ -93,6 +112,28 @@ class JupyterHubDataTopology:
             resolved = self.resolve_checkpoint_path(name)
             p["checkpoints"][name] = str(resolved if resolved is not None else self.root / spec.checkpoint_rel_path)
         return p
+
+    def resolve_long_artifact_path(self, artifact_name: str) -> Optional[Path]:
+        """
+        Resolves existing path for a long sequence artifact, checking
+        self.root, subfolders long/, cnn_long/, cnn_kraken/, and project root.
+        """
+        candidates = [
+            self.root / artifact_name,
+            self.root / "long" / artifact_name,
+            self.root / "cnn_long" / artifact_name,
+            self.root / "cnn_kraken" / artifact_name,
+            self.root.parent / "long" / artifact_name,
+            self.root.parent / "cnn_long" / artifact_name,
+            self.root.parent / "cnn_kraken" / artifact_name,
+            self.root.parent / artifact_name,
+            Path.cwd() / "long" / artifact_name,
+            Path.cwd() / artifact_name,
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return None
 
     def resolve_checkpoint_path(self, variant_name: str) -> Optional[Path]:
         """
