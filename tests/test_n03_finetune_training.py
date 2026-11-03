@@ -537,6 +537,148 @@ class TestN03FinetuneTraining(unittest.TestCase):
             self.assertIn("training_history=training_history", cell4_src)
             self.assertIn("history_df.to_string()", cell5_src)
 
+    # -------------------------------------------------------------------------
+    # Fix: Compiled Model (_orig_mod) Checkpoint Resume, Save, and Freezing
+    # -------------------------------------------------------------------------
+
+    def test_compiled_model_load_resume_checkpoint(self):
+        """C1: load_resume_checkpoint and resume_checkpoint restore weights into compiled (_orig_mod) models from bare or prefixed checkpoints."""
+        class MockCompiledWrapper(nn.Module):
+            """Emulates torch.compile OptimizedModule which nests the original model under _orig_mod."""
+            def __init__(self, inner: nn.Module):
+                super().__init__()
+                self._orig_mod = inner
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self._orig_mod(x)
+
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+            learning_rate=5e-5,
+            mode="historical_reproduction",
+        )
+
+        # Reference uncompiled model trained for 1 epoch
+        ref_inner = DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len)
+        ref_trainer = ControlledTrainer(model=ref_inner, config=cfg, device=self.device)
+        ref_trainer.train_epoch(self.loader, max_batches=1)
+
+        raw_bare_state = {k: v.clone() for k, v in ref_inner.state_dict().items()}
+        raw_prefixed_state = {f"_orig_mod.{k}": v.clone() for k, v in raw_bare_state.items()}
+        history_payload = [{"epoch": 2, "train_loss": 1.23, "val_f1_macro": 0.42}]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bare_ckpt = Path(tmpdir) / "bare_last.pt"
+            prefixed_ckpt = Path(tmpdir) / "prefixed_last.pt"
+            torch.save(
+                {"epoch": 2, "model_state_dict": raw_bare_state, "training_history": history_payload},
+                bare_ckpt,
+            )
+            torch.save(
+                {"epoch": 2, "model_state_dict": raw_prefixed_state, "training_history": history_payload},
+                prefixed_ckpt,
+            )
+
+            # 1. Load bare checkpoint into compiled (_orig_mod) model
+            compiled_model_1 = MockCompiledWrapper(DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len))
+            trainer_c1 = ControlledTrainer(model=compiled_model_1, config=cfg, device=self.device)
+            start_ep_1, hist_1 = trainer_c1.load_resume_checkpoint(bare_ckpt)
+            self.assertEqual(start_ep_1, 3)
+            self.assertEqual(len(hist_1), 1)
+            for k, v in raw_bare_state.items():
+                self.assertTrue(torch.equal(compiled_model_1._orig_mod.state_dict()[k], v))
+
+            # 2. Load _orig_mod.-prefixed checkpoint into compiled (_orig_mod) model
+            compiled_model_2 = MockCompiledWrapper(DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len))
+            trainer_c2 = ControlledTrainer(model=compiled_model_2, config=cfg, device=self.device)
+            resumed_ep_2 = trainer_c2.resume_checkpoint(prefixed_ckpt)
+            self.assertEqual(resumed_ep_2, 2)
+            for k, v in raw_bare_state.items():
+                self.assertTrue(torch.equal(compiled_model_2._orig_mod.state_dict()[k], v))
+
+            # 3. Load bare checkpoint into uncompiled model
+            uncompiled_model = DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len)
+            trainer_u = ControlledTrainer(model=uncompiled_model, config=cfg, device=self.device)
+            start_ep_u, _ = trainer_u.load_resume_checkpoint(bare_ckpt)
+            self.assertEqual(start_ep_u, 3)
+            for k, v in raw_bare_state.items():
+                self.assertTrue(torch.equal(uncompiled_model.state_dict()[k], v))
+
+    def test_compiled_model_save_checkpoint_strips_orig_mod_prefix(self):
+        """C2: save_epoch_checkpoint and check_and_save_checkpoint serialize unprefixed keys from _orig_mod."""
+        class MockCompiledWrapper(nn.Module):
+            def __init__(self, inner: nn.Module):
+                super().__init__()
+                self._orig_mod = inner
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self._orig_mod(x)
+
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+            learning_rate=5e-5,
+            checkpoint_metric="best_val_macro_f1",
+            mode="historical_reproduction",
+        )
+        compiled_model = MockCompiledWrapper(DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len))
+        trainer = ControlledTrainer(model=compiled_model, config=cfg, device=self.device)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ep_ckpt = Path(tmpdir) / "epoch_ckpt.pt"
+            best_ckpt = Path(tmpdir) / "best_ckpt.pt"
+
+            trainer.save_epoch_checkpoint(epoch=1, metrics={"val_f1_macro": 0.5}, save_path=ep_ckpt)
+            trainer.check_and_save_checkpoint(eval_metrics={"val_f1_macro": 0.5}, save_path=best_ckpt)
+
+            ep_payload = torch.load(ep_ckpt, map_location="cpu")
+            best_payload = torch.load(best_ckpt, map_location="cpu")
+
+            for key in ep_payload["model_state_dict"].keys():
+                self.assertFalse(key.startswith("_orig_mod."), f"Saved epoch checkpoint key '{key}' should not start with _orig_mod.")
+            for key in best_payload["model_state_dict"].keys():
+                self.assertFalse(key.startswith("_orig_mod."), f"Saved best checkpoint key '{key}' should not start with _orig_mod.")
+
+            self.assertIn("conv1.weight", ep_payload["model_state_dict"])
+            self.assertIn("fc.weight", ep_payload["model_state_dict"])
+            self.assertIn("conv1.weight", best_payload["model_state_dict"])
+            self.assertIn("fc.weight", best_payload["model_state_dict"])
+
+    def test_compiled_model_freeze_layers_and_bn_eval(self):
+        """C3: ControlledTrainer.__init__ resolves freeze_layers against _orig_mod on compiled models."""
+        class MockCompiledWrapper(nn.Module):
+            def __init__(self, inner: nn.Module):
+                super().__init__()
+                self._orig_mod = inner
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self._orig_mod(x)
+
+        inner = DummyConv1DModel(num_classes=self.num_classes, seq_len=self.seq_len)
+        compiled_model = MockCompiledWrapper(inner)
+        cfg = ControlledExperimentConfig(
+            architectures=("resnet50_1d",),
+            num_classes=self.num_classes,
+        )
+        trainer = ControlledTrainer(
+            model=compiled_model,
+            config=cfg,
+            device=self.device,
+            freeze_layers=("conv1", "bn1"),
+        )
+
+        # Verify conv1 and bn1 on inner _orig_mod are frozen, while fc remains trainable
+        for name, param in inner.named_parameters():
+            if name.startswith(("conv1", "bn1")):
+                self.assertFalse(param.requires_grad, f"Parameter {name} on compiled inner model must be frozen")
+            elif name.startswith("fc"):
+                self.assertTrue(param.requires_grad, f"Parameter {name} on compiled inner model must be trainable")
+
+        # Verify bn1 stays in eval() mode after train_epoch
+        trainer.train_epoch(self.loader, max_batches=1)
+        self.assertFalse(inner.bn1.training, "Frozen BatchNorm1d on compiled inner model must remain in eval() mode")
+
 
 if __name__ == "__main__":
     unittest.main()

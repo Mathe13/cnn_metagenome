@@ -1,0 +1,25 @@
+# fix-compiled-model-checkpoint-resume verification
+
+**Verdict**: PASS
+**Profile**: light
+**Diff range**: 9279416..working-tree
+**Round**: 1 - full
+**Verifier**: independent sub-agent (author != verifier)
+
+## Checks
+
+| Check | Claim | Proof run | Evidence | Result |
+| --- | --- | --- | --- | --- |
+| C1 | `ControlledTrainer.load_resume_checkpoint` and `ControlledTrainer.resume_checkpoint` restore `cleaned_state` into `getattr(self.model, "_orig_mod", self.model)` without raising `RuntimeError` when `self.model` is wrapped with `torch.compile` (or an `_orig_mod` wrapper), whether the checkpoint on disk was saved with `"_orig_mod."` key prefixes or bare keys | `PYTHONPATH=src .venv/bin/python3 -m unittest -v tests/test_n03_finetune_training.py tests/test_model_registry.py -k test_compiled_model_load_resume_checkpoint -k test_compiled_model_save_checkpoint_strips_orig_mod_prefix -k test_compiled_model_freeze_layers_and_bn_eval -k test_load_model_checkpoint_into_compiled_wrapper` exit 0 | `tests/test_n03_finetune_training.py:590` - `self.assertTrue(torch.equal(compiled_model_1._orig_mod.state_dict()[k], v))`; `tests/test_n03_finetune_training.py:598` - `self.assertTrue(torch.equal(compiled_model_2._orig_mod.state_dict()[k], v))`; `tests/test_n03_finetune_training.py:606` - `self.assertTrue(torch.equal(uncompiled_model.state_dict()[k], v))` | PASS |
+| C2 | `ControlledTrainer.save_epoch_checkpoint` and `ControlledTrainer.check_and_save_checkpoint` serialize `model_state_dict` from `getattr(self.model, "_orig_mod", self.model).state_dict()` with clean unprefixed keys (no `"_orig_mod."` prefix), even when `self.model` is wrapped in an `_orig_mod` container | `PYTHONPATH=src .venv/bin/python3 -m unittest -v tests/test_n03_finetune_training.py tests/test_model_registry.py -k test_compiled_model_load_resume_checkpoint -k test_compiled_model_save_checkpoint_strips_orig_mod_prefix -k test_compiled_model_freeze_layers_and_bn_eval -k test_load_model_checkpoint_into_compiled_wrapper` exit 0 | `tests/test_n03_finetune_training.py:639` - `self.assertFalse(key.startswith("_orig_mod."), f"Saved epoch checkpoint key '{key}' should not start with _orig_mod.")`; `tests/test_n03_finetune_training.py:641` - `self.assertFalse(key.startswith("_orig_mod."), f"Saved best checkpoint key '{key}' should not start with _orig_mod.")` | PASS |
+| C3 | `ControlledTrainer.__init__` resolves `freeze_layers` prefixes against `getattr(self.model, "_orig_mod", self.model)` so that frozen parameters (`requires_grad=False`) and frozen `BatchNorm` modules (`eval()`) are enforced identically whether `model` is compiled or uncompiled | `PYTHONPATH=src .venv/bin/python3 -m unittest -v tests/test_n03_finetune_training.py tests/test_model_registry.py -k test_compiled_model_load_resume_checkpoint -k test_compiled_model_save_checkpoint_strips_orig_mod_prefix -k test_compiled_model_freeze_layers_and_bn_eval -k test_load_model_checkpoint_into_compiled_wrapper` exit 0 | `tests/test_n03_finetune_training.py:674` - `self.assertFalse(param.requires_grad, f"Parameter {name} on compiled inner model must be frozen")`; `tests/test_n03_finetune_training.py:680` - `self.assertFalse(inner.bn1.training, "Frozen BatchNorm1d on compiled inner model must remain in eval() mode")` | PASS |
+| C4 | `load_model_checkpoint` in `src/viral_cnn/models/registry.py` loads `clean_state_dict` into `getattr(model, "_orig_mod", model)` so that loading either a bare or `"_orig_mod."`-prefixed checkpoint into a compiled or `_orig_mod`-wrapped model succeeds with `strict=True` | `PYTHONPATH=src .venv/bin/python3 -m unittest -v tests/test_n03_finetune_training.py tests/test_model_registry.py -k test_compiled_model_load_resume_checkpoint -k test_compiled_model_save_checkpoint_strips_orig_mod_prefix -k test_compiled_model_freeze_layers_and_bn_eval -k test_load_model_checkpoint_into_compiled_wrapper` exit 0 | `tests/test_model_registry.py:279` - `self.assertTrue(torch.equal(compiled_target_1._orig_mod.state_dict()[k], v))`; `tests/test_model_registry.py:285` - `self.assertTrue(torch.equal(compiled_target_2._orig_mod.state_dict()[k], v))`; `tests/test_model_registry.py:291` - `self.assertTrue(torch.equal(uncompiled_target.state_dict()[k], v))` | PASS |
+
+## Swept existing verified
+
+- **dependency failure (`existing`)**: Verified in `src/viral_cnn/training/trainer.py:528-529` (`if not path.exists(): raise FileNotFoundError(...)`) and `src/viral_cnn/models/registry.py:244-245` (`if not ckpt_path.exists(): raise FileNotFoundError(...)`).
+- **observability (`existing`)**: Verified in `src/viral_cnn/models/registry.py:246` and `src/viral_cnn/models/registry.py:249` (`log_artifact_path("checkpoint", ...)` emitting `[LOG_PATH] Loading checkpoint from: ...`).
+
+## Gate
+
+`PYTHONPATH=src .venv/bin/python3 -m unittest -v tests/test_n03_finetune_training.py tests/test_model_registry.py -k test_compiled_model_load_resume_checkpoint -k test_compiled_model_save_checkpoint_strips_orig_mod_prefix -k test_compiled_model_freeze_layers_and_bn_eval -k test_load_model_checkpoint_into_compiled_wrapper` - 4 passed, 0 failed

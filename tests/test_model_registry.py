@@ -250,6 +250,46 @@ class TestModelRegistryAndTrainingManifest(unittest.TestCase):
 
             self.assertTrue(torch.allclose(out_base, out_loaded, atol=1e-6))
 
+    def test_load_model_checkpoint_into_compiled_wrapper(self):
+        """C4 (fix-compiled-model-checkpoint-resume): load_model_checkpoint loads bare or _orig_mod.-prefixed dicts into a compiled wrapper."""
+        class MockCompiledWrapper(torch.nn.Module):
+            def __init__(self, inner: torch.nn.Module):
+                super().__init__()
+                self._orig_mod = inner
+
+            @property
+            def num_classes(self) -> int:
+                return getattr(self._orig_mod, "num_classes", 10)
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self._orig_mod(x)
+
+        torch.manual_seed(777)
+        ref_model = ResNet50_1D(num_classes=10)
+        bare_state = {
+            k: (torch.randn_like(v) if v.is_floating_point() else v.clone())
+            for k, v in ref_model.state_dict().items()
+        }
+        prefixed_state = {f"_orig_mod.{k}": v.clone() for k, v in bare_state.items()}
+
+        # 1. Load bare checkpoint into compiled wrapper
+        compiled_target_1 = MockCompiledWrapper(ResNet50_1D(num_classes=10))
+        load_model_checkpoint(compiled_target_1, bare_state, expected_classes=10, strict=True)
+        for k, v in bare_state.items():
+            self.assertTrue(torch.equal(compiled_target_1._orig_mod.state_dict()[k], v))
+
+        # 2. Load _orig_mod.-prefixed checkpoint into compiled wrapper
+        compiled_target_2 = MockCompiledWrapper(ResNet50_1D(num_classes=10))
+        load_model_checkpoint(compiled_target_2, prefixed_state, expected_classes=10, strict=True)
+        for k, v in bare_state.items():
+            self.assertTrue(torch.equal(compiled_target_2._orig_mod.state_dict()[k], v))
+
+        # 3. Load _orig_mod.-prefixed checkpoint into uncompiled model
+        uncompiled_target = ResNet50_1D(num_classes=10)
+        load_model_checkpoint(uncompiled_target, prefixed_state, expected_classes=10, strict=True)
+        for k, v in bare_state.items():
+            self.assertTrue(torch.equal(uncompiled_target.state_dict()[k], v))
+
 
 if __name__ == "__main__":
     unittest.main()

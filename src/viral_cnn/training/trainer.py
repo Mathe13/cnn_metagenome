@@ -41,11 +41,12 @@ class ControlledTrainer:
             self.freeze_layers = tuple(getattr(config, "freeze_layers", ()))
 
         self._frozen_bn_modules: list[nn.Module] = []
+        target_model = getattr(self.model, "_orig_mod", self.model)
         if self.freeze_layers:
-            for name, param in self.model.named_parameters():
+            for name, param in target_model.named_parameters():
                 if any(name.startswith(prefix) for prefix in self.freeze_layers):
                     param.requires_grad = False
-            for name, module in self.model.named_modules():
+            for name, module in target_model.named_modules():
                 if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
                     if any(name.startswith(prefix) for prefix in self.freeze_layers):
                         self._frozen_bn_modules.append(module)
@@ -458,9 +459,10 @@ class ControlledTrainer:
         if is_best:
             path = Path(save_path)
             path.parent.mkdir(parents=True, exist_ok=True)
+            target_model = getattr(self.model, "_orig_mod", self.model)
             payload = {
                 "step": self.current_step,
-                "model_state_dict": self.model.state_dict(),
+                "model_state_dict": target_model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "eval_metrics": eval_metrics,
                 "checkpoint_metric": metric_name,
@@ -491,9 +493,10 @@ class ControlledTrainer:
         if self.scaler is not None and hasattr(self.scaler, "state_dict"):
             scaler_state = self.scaler.state_dict()
 
+        target_model = getattr(self.model, "_orig_mod", self.model)
         payload = {
             "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": target_model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": sched_state,
             "scaler_state_dict": scaler_state,
@@ -529,10 +532,14 @@ class ControlledTrainer:
         if not isinstance(checkpoint, dict):
             raise ValueError(f"Invalid checkpoint format in '{path}': expected dict, got {type(checkpoint)}")
 
-        # Clean potential _orig_mod. prefix from torch.compile
+        # Clean potential _orig_mod. prefix from torch.compile and load into underlying module
         raw_state = checkpoint.get("model_state_dict", checkpoint)
-        cleaned_state = {k.replace("_orig_mod.", ""): v for k, v in raw_state.items()}
-        self.model.load_state_dict(cleaned_state)
+        cleaned_state = {
+            (k[len("_orig_mod.") :] if k.startswith("_orig_mod.") else k): v
+            for k, v in raw_state.items()
+        }
+        target_model = getattr(self.model, "_orig_mod", self.model)
+        target_model.load_state_dict(cleaned_state)
 
         if "optimizer_state_dict" in checkpoint and self.optimizer is not None:
             try:

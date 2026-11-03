@@ -268,8 +268,11 @@ def load_model_checkpoint(
     }
 
     # Head shape / class count verification
+    target_model = getattr(model, "_orig_mod", model)
     target_classes = expected_classes
-    if target_classes is None and hasattr(model, "num_classes"):
+    if target_classes is None and hasattr(target_model, "num_classes"):
+        target_classes = getattr(target_model, "num_classes")
+    elif target_classes is None and hasattr(model, "num_classes"):
         target_classes = getattr(model, "num_classes")
 
     if "fc.weight" in clean_state_dict and target_classes is not None:
@@ -280,7 +283,7 @@ def load_model_checkpoint(
                 f"but model/expected specifies {target_classes} classes."
             )
 
-    model.load_state_dict(clean_state_dict, strict=strict)
+    target_model.load_state_dict(clean_state_dict, strict=strict)
     return metadata
 
 
