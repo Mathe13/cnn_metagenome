@@ -15,6 +15,7 @@ from viral_cnn.eval.latent import (
     extract_latent_embeddings,
     load_embedding_artifact,
     save_embedding_artifact,
+    evaluate_silhouette_with_audit,
 )
 from viral_cnn.notebook_runtime import preflight_latent_inputs
 from viral_cnn.data.parquet_dataset import ParquetBatchIterableDataset
@@ -95,11 +96,12 @@ class LatentArtifactTests(unittest.TestCase):
                 load_embedding_artifact(corrupted, expected)
 
     def test_sampling_provenance_is_recorded(self):
-        item = artifact("validation", ["p:0", "p:1"])
-        item.manifest.update(population_available=20, extracted_count=2, sampling={"rule": "first-2", "seed": 42})
-        self.assertEqual(item.manifest["population_available"], 20)
-        self.assertEqual(item.manifest["extracted_count"], len(item.row_ids))
-        self.assertEqual(item.manifest["sampling"]["seed"], 42)
+        notebook_path = Path(__file__).resolve().parents[1] / "notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb"
+        notebook = json.loads(notebook_path.read_text())
+        source = "\n".join("".join(c.get("source", [])) for c in notebook["cells"])
+        self.assertIn('"population_available": dataset.total_samples', source)
+        self.assertIn('"extracted_count": count', source)
+        self.assertIn('"rule": "none", "seed": ctx.seed', source)
 
 
 class ProbeProtocolTests(unittest.TestCase):
@@ -120,11 +122,14 @@ class ProbeProtocolTests(unittest.TestCase):
         validation = artifact("validation", [f"va:{i}" for i in range(8)])
         probe = LinearProbeClassifier(4, 2)
         selection = probe.fit_select_and_seal(train, validation, epochs=3, batch_size=4)
+        self.assertRegex(selection["weights_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(selection["selection_rule"], "maximum validation Accuracy; earliest epoch wins ties")
         self.assertEqual(selection["selected_epoch"], min(x["epoch"] for x in selection["selection_history"] if x["validation_accuracy"] == max(y["validation_accuracy"] for y in selection["selection_history"])))
         test = artifact("test", [f"te:{i}" for i in range(4)])
         result = probe.evaluate_artifact(test)
         self.assertEqual(result["n_test_samples"], 4)
+        self.assertEqual(result["row_ids"], test.row_ids.tolist())
+        self.assertEqual(result["weights_sha256"], selection["weights_sha256"])
         with self.assertRaisesRegex(RuntimeError, "only once"):
             probe.evaluate_artifact(test)
         with self.assertRaisesRegex(RuntimeError, "cannot be fitted"):
@@ -167,6 +172,13 @@ class KNNAuditTests(unittest.TestCase):
         self.assertEqual(result["n_classes_total"], 2)
         self.assertEqual(result["n_classes_with_query"], 2)
         self.assertEqual(result["n_classes_reference_only"], 0)
+        sil_labels = np.array([0, 0, 0, 1, 1, 1, 2])
+        silhouette = evaluate_silhouette_with_audit(np.eye(3, dtype=np.float32)[sil_labels], sil_labels)
+        self.assertEqual(silhouette["valid_classes_count"], 2)
+        self.assertEqual(silhouette["excluded_classes_count"], 1)
+        self.assertEqual(silhouette["retained_sample_count"], 6)
+        self.assertEqual(silhouette["retained_sample_rate"], 6 / 7)
+        self.assertEqual(silhouette["valid_class_rate"], 2 / 3)
 
     def test_genome_independence_requires_explicit_ids(self):
         # Operational row IDs are deliberately not interpreted as genome accessions.
@@ -178,6 +190,7 @@ class KNNAuditTests(unittest.TestCase):
         result = evaluate_genome_disjoint_knn(features, labels, genome_ids, k=1)
         self.assertEqual(result["excluded_species_labels"], [2])
         self.assertEqual(result["n_single_genome_species_excluded"], 1)
+        self.assertTrue(result["zero_accession_overlap"])
 
 
 class NotebookContractTests(unittest.TestCase):
@@ -194,6 +207,13 @@ class NotebookContractTests(unittest.TestCase):
         self.assertIn("evaluate_artifact(test", self.source)
         self.assertIn("Test_Row_IDs", self.source)
         self.assertIn("native_test_logits", self.source)
+        self.assertIn('"Linear_Probe_Test_Acc"', self.source)
+        self.assertIn('"Linear_Probe_Macro_F1"', self.source)
+        self.assertIn('"N"', self.source)
+        self.assertIn('"Supported_Classes"', self.source)
+        cell = next("".join(c["source"]) for c in self.notebook["cells"] if c.get("cell_type") == "code" and "fit_select_and_seal" in "".join(c.get("source", [])))
+        self.assertIn("test_ids", cell)
+        self.assertIn('"Test_Row_IDs"', self.source)
 
     def test_notebook_preflight_and_run_manifest_contract(self):
         self.assertIn("preflight_latent_inputs", self.source)
