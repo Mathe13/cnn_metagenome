@@ -4,6 +4,7 @@
 import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,14 +66,16 @@ def main() -> int:
         return 1
 
     print(f"Compiling {tex_path.name} to PDF...")
-    res = compile_manuscript(tex_path, output_dir=PAPER_DIR)
+    # Never overwrite a versioned manuscript PDF or its auxiliary files.
+    with tempfile.TemporaryDirectory(prefix="cnn-metagenome-paper-") as tmpdir:
+        res = compile_manuscript(tex_path, output_dir=Path(tmpdir))
     if res.returncode != 0:
         print(f"Compilation FAILED with code {res.returncode}:", file=sys.stderr)
         print(res.stdout[-2000:], file=sys.stderr)
         return res.returncode
 
     pdf_name = tex_path.stem + ".pdf"
-    print(f"SUCCESS: Compiled {PAPER_DIR / pdf_name}")
+    print(f"SUCCESS: Compiled {pdf_name} in a temporary directory (not retained)")
     return 0
 
 

@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import platform
+import hashlib
+import threading
 import random
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -48,6 +50,13 @@ class NotebookRunManifest:
     checkpoints: Dict[str, str] = field(default_factory=dict)
     input_files: List[str] = field(default_factory=list)
     metrics_summary: Dict[str, Any] = field(default_factory=dict)
+    schema_version: int = 1
+    run_id: str = "legacy"
+    configuration: Dict[str, Any] = field(default_factory=dict)
+    evidence: Dict[str, Any] = field(default_factory=dict)
+    outputs: List[Dict[str, Any]] = field(default_factory=list)
+    inputs: List[Dict[str, Any]] = field(default_factory=list)
+    git_dirty: Optional[bool] = None
 
 
 @dataclass
@@ -58,6 +67,8 @@ class RuntimeContext:
     is_smoke_test: bool
     topology: JupyterHubDataTopology
     library_versions: Dict[str, str] = field(default_factory=dict)
+    run_id: Optional[str] = None
+    output_dir: Optional[Path] = None
 
 
 class JupyterHubDataTopology:
@@ -185,10 +196,18 @@ def get_library_versions() -> Dict[str, str]:
         "torch": torch.__version__,
         "numpy": np.__version__,
         "pandas": pd.__version__,
+        "cuda": str(torch.version.cuda) if torch.version.cuda else "unavailable",
+        "dask": "unavailable",
+        "cudf": "unavailable",
     }
     try:
         import pyarrow
         versions["pyarrow"] = pyarrow.__version__
+    except ImportError:
+        versions["pyarrow"] = "unavailable"
+    try:
+        import dask
+        versions["dask"] = str(dask.__version__)
     except ImportError:
         pass
     try:
@@ -198,6 +217,118 @@ def get_library_versions() -> Dict[str, str]:
     except Exception:
         pass
     return versions
+
+
+NOTEBOOK_REQUIREMENTS: Dict[str, List[Dict[str, Any]]] = {
+    "short/01": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "short/02": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}],
+    "short/03": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "short/04": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/convnext_transfer_species", "kind": "file"}],
+    "short/05": [{"path": "short/ictv_master", "kind": "file"}, {"path": "short/species_csv", "kind": "file"}],
+    "short/06": [{"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "short/07": [{"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "short/08": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded"]}, {"path": "results_reproduction/motifs/manifest_07_motifs.json", "kind": "file", "external": True}],
+    "short/09": [{"path": "short/kraken_blast_dir", "kind": "directory"}, {"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "short/10": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}],
+    "short/11": [{"path": "short/ictv_master", "kind": "file"}, {"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"}],
+    "long/01": [{"path": "long/raw_database_final", "kind": "file"}],
+    "long/02": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "long/03": [
+        {"path": "long/resultados_inferencia_long_reads_ResNet50.parquet", "kind": "file"},
+        {"path": "long/resultados_inferencia_long_reads_ResNet50_Noise.parquet", "kind": "file"},
+        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_Z.parquet", "kind": "file"},
+        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_T.parquet", "kind": "file"},
+        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_F.parquet", "kind": "file"},
+    ],
+    "long/04": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}],
+}
+
+
+def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
+    """Resolve a dotted requirement key from the canonical topology."""
+    if key.startswith("results_reproduction/"):
+        project_root = Path(__file__).resolve().parents[2]
+        return (project_root / key).resolve()
+    if key.startswith("long/") and key.count("/") == 1:
+        resolved = topology.resolve_long_artifact_path(key.split("/", 1)[1])
+        return (resolved or (topology.root / key.split("/", 1)[1])).resolve()
+    parts = key.split("/")
+    node: Any = topology.paths
+    for part in parts:
+        node = node[part]
+    return Path(node).expanduser().resolve()
+
+
+def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_test: bool = False) -> Dict[str, Any]:
+    """Inspect declared notebook prerequisites using only filesystem metadata."""
+    if notebook_id not in NOTEBOOK_REQUIREMENTS:
+        raise ValueError(f"Unknown notebook_id {notebook_id!r}; choose one of {sorted(NOTEBOOK_REQUIREMENTS)}")
+    topology = JupyterHubDataTopology(data_root)
+    results = []
+    for spec in NOTEBOOK_REQUIREMENTS[notebook_id]:
+        path = _resolve_requirement(topology, spec["path"])
+        ok = path.exists() and os.access(path, os.R_OK)
+        detail = "readable" if ok else ("missing" if not path.exists() else "unreadable")
+        if ok and spec["kind"] == "parquet":
+            files = [path] if path.is_file() else sorted(path.glob("*.parquet"))
+            if path.is_dir() and not files:
+                files = sorted(path.glob("*/**/*.parquet"))
+            if not files:
+                ok, detail = False, "no parquet files"
+            else:
+                try:
+                    schema = pq.read_schema(files[0])
+                    absent = sorted(set(spec.get("columns", [])) - set(schema.names))
+                    if absent:
+                        ok, detail = False, f"missing columns: {absent}"
+                    else:
+                        detail = f"parquet metadata OK; {len(files)} file(s); schema from {files[0]}"
+                except Exception as exc:
+                    ok, detail = False, f"parquet metadata unreadable: {exc}"
+        results.append({"requirement": spec["path"], "path": str(path), "status": "READY" if ok else "BLOCKED", "detail": detail, "external": spec.get("external", False)})
+    ready = all(x["status"] == "READY" for x in results)
+    return {"notebook_id": notebook_id, "status": "READY" if ready else "BLOCKED", "is_smoke_test": smoke_test, "scientific_reproduction_certified": False, "requirements": results}
+
+
+_reservation_lock = threading.Lock()
+
+
+def reserve_run_directory(project_root: Union[str, Path], run_id: str, notebook_id: str) -> Path:
+    """Atomically reserve a unique per-run notebook output directory."""
+    if not run_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id):
+        raise ValueError("run_id may contain only letters, digits, dot, underscore, and hyphen")
+    target = Path(project_root).resolve() / "results_reproduction" / "runs" / run_id / notebook_id
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _reservation_lock:
+        try:
+            target.mkdir()
+        except FileExistsError as exc:
+            raise FileExistsError(f"Run output already reserved: {target}") from exc
+    return target
+
+
+def file_identity(path: Union[str, Path]) -> Dict[str, Any]:
+    """Return observed path, size, and SHA-256 for an artifact file."""
+    p = Path(path).resolve()
+    if not p.is_file():
+        return {"path": str(p), "sha256": "unknown", "size_bytes": "unknown", "quality": "unknown"}
+    digest = hashlib.sha256()
+    with p.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"path": str(p), "sha256": digest.hexdigest(), "size_bytes": p.stat().st_size, "quality": "observed"}
+
+
+def empirical_manifest_gate(manifest: Union[NotebookRunManifest, Dict[str, Any]]) -> Dict[str, Any]:
+    """Reject synthetic, legacy, or identity-incomplete runs as empirical evidence."""
+    data = asdict(manifest) if dataclasses.is_dataclass(manifest) else manifest
+    missing = []
+    if data.get("is_smoke_test") is True: missing.append("is_smoke_test=true")
+    for key in ("run_id", "notebook_id", "git_commit", "inputs", "outputs", "evidence"):
+        if not data.get(key): missing.append(key)
+    if data.get("schema_version") != 1: missing.append("schema_version=1")
+    if data.get("evidence", {}).get("status") != "observed": missing.append("evidence.status=observed")
+    return {"accepted": not missing, "rejected_fields": missing}
 
 
 def is_remote_server() -> bool:
@@ -384,10 +515,26 @@ def write_notebook_manifest(
     seed: int = 42,
     output_json_path: Optional[Union[str, Path]] = None,
     output_yaml_path: Optional[Union[str, Path]] = None,
+    run_id: Optional[str] = None,
+    configuration: Optional[Dict[str, Any]] = None,
+    outputs: Optional[List[Union[str, Path]]] = None,
+    command: Optional[str] = None,
 ) -> NotebookRunManifest:
     """
     Constructs and serializes a NotebookRunManifest.
     """
+    output_records = [file_identity(p) for p in (outputs or [])]
+    input_records = [file_identity(p) for p in (input_files or [])]
+    checkpoint_records: Dict[str, Any] = {}
+    for variant, value in (checkpoints or {}).items():
+        path_value = value.get("path") if isinstance(value, dict) else value
+        identity = file_identity(path_value) if path_value and Path(path_value).is_file() else {"path": str(path_value or "unknown"), "sha256": "unknown", "quality": "unknown"}
+        spec = REGISTERED_VARIANTS.get(variant)
+        checkpoint_records[variant] = {**identity, "rank": spec.rank if spec else "unknown", "variant": variant}
+    try:
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        dirty = None
     manifest = NotebookRunManifest(
         notebook_id=notebook_id,
         timestamp_utc=datetime.now(timezone.utc).isoformat(),
@@ -397,9 +544,15 @@ def write_notebook_manifest(
         is_smoke_test=is_smoke_test,
         device="cuda" if torch.cuda.is_available() else "cpu",
         library_versions=get_library_versions(),
-        checkpoints=checkpoints or {},
+        checkpoints=checkpoint_records,
         input_files=input_files or [],
         metrics_summary=metrics_summary or {},
+        run_id=run_id or os.getenv("RUN_ID", "legacy"),
+        configuration={**(configuration or {}), "command": command or f"jupyter notebook {notebook_id}"},
+        outputs=output_records,
+        inputs=input_records,
+        evidence={"status": "synthetic" if is_smoke_test else "observed", "inputs": input_records, "quality": "observed" if input_records else "unknown"},
+        git_dirty=dirty,
     )
 
     data = asdict(manifest)
@@ -407,12 +560,16 @@ def write_notebook_manifest(
     if output_json_path:
         out_j = Path(output_json_path)
         out_j.parent.mkdir(parents=True, exist_ok=True)
+        if out_j.exists():
+            raise FileExistsError(f"Refusing to overwrite manifest: {out_j}")
         with open(out_j, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     if output_yaml_path:
         out_y = Path(output_yaml_path)
         out_y.parent.mkdir(parents=True, exist_ok=True)
+        if out_y.exists():
+            raise FileExistsError(f"Refusing to overwrite manifest: {out_y}")
         with open(out_y, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False)
 

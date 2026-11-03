@@ -3,6 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 import subprocess
+import tempfile
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -50,10 +51,10 @@ class TestManuscriptCompilation(unittest.TestCase):
     def test_compile_paper_submission_exit_zero(self):
         """C16: compile_manuscript on submission mode exits with code 0."""
         # Test compiling manuscript_submission.tex
-        res = compile_manuscript(self.submission_tex, output_dir=self.paper_dir)
+        with tempfile.TemporaryDirectory(prefix="cnn-metagenome-test-paper-") as tmpdir:
+            res = compile_manuscript(self.submission_tex, output_dir=Path(tmpdir))
+            self.assertTrue((Path(tmpdir) / "manuscript_submission.pdf").exists())
         self.assertEqual(res.returncode, 0, f"Compilation failed: {res.stderr}\n{res.stdout}")
-        submission_pdf = self.paper_dir / "manuscript_submission.pdf"
-        self.assertTrue(submission_pdf.exists())
 
     def test_traceability_matrix_covers_all_tables_and_figures(self):
         """C17: audit doc contains mapping for all 12 tables and 5 figures."""

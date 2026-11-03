@@ -185,6 +185,31 @@ To decouple lightweight code development from multi-gigabyte genomic datasets an
    LOG_PATH=true
    ```
 
+   `.env` is a template only: Jupyter kernels inherit the environment of the server process. Export the values before starting JupyterLab, or configure them in the JupyterHub kernel environment. For example:
+   ```bash
+   set -a; source .env; set +a
+   jupyter lab
+   ```
+
+   For an offline CPU environment (Python 3.10; package versions measured locally on 2026-11-03):
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python -m pip install --upgrade pip
+   python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+   python -m pip install -r requirements-cpu.txt
+   python -m ipykernel install --user --name cnn-metagenome --display-name "Python (cnn-metagenome)"
+   ```
+   GPU environments require a separately matched PyTorch/CUDA build; Dask and cuDF are reported as unavailable when absent and are not inferred from notebook output.
+
+### Notebook preflight and run manifests
+
+Inspect declared requirements before running a notebook (no Parquet rows, model weights, or sequences are loaded):
+```bash
+python scripts/preflight_notebook.py short/01 --data-root "$DATA_ROOT"
+```
+The command exits `0` for `READY` and `2` for `BLOCKED`. `READY` means only that declared files are readable and available metadata is compatible; it does not certify scientific reproduction. Run namespaces can be reserved with `reserve_run_directory(project_root, run_id, notebook_id)` from `viral_cnn.notebook_runtime`; an existing namespace fails closed. Historical manifests are not upgraded to empirical evidence.
+
 ---
 
 ## Quickstart & CLI Pipelines
