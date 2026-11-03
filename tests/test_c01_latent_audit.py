@@ -11,6 +11,7 @@ from viral_cnn.eval.latent import (
     EmbeddingArtifact,
     LinearProbeClassifier,
     evaluate_cosine_knn,
+    evaluate_genome_disjoint_knn,
     extract_latent_embeddings,
     load_embedding_artifact,
     save_embedding_artifact,
@@ -128,6 +129,10 @@ class ProbeProtocolTests(unittest.TestCase):
             probe.evaluate_artifact(test)
         with self.assertRaisesRegex(RuntimeError, "cannot be fitted"):
             probe.fit_select_and_seal(train, validation, epochs=1)
+        notebook_path = Path(__file__).resolve().parents[1] / "notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb"
+        notebook = json.loads(notebook_path.read_text())
+        cell = next("".join(c["source"]) for c in notebook["cells"] if c.get("cell_type") == "code" and "fit_select_and_seal" in "".join(c.get("source", [])))
+        self.assertLess(cell.index("fit_select_and_seal"), cell.index('split="test"'))
 
 
 class KNNAuditTests(unittest.TestCase):
@@ -167,7 +172,12 @@ class KNNAuditTests(unittest.TestCase):
         # Operational row IDs are deliberately not interpreted as genome accessions.
         item = artifact("test", ["assembly:0", "assembly:1"])
         self.assertNotIn("genome_ids", item.manifest)
-        self.assertEqual(item.manifest["split"], "test")
+        labels = np.array([0, 0, 0, 1, 1, 1, 2])
+        genome_ids = np.array(["a", "b", "c", "d", "e", "f", "g"])
+        features = np.eye(3, dtype=np.float32)[labels]
+        result = evaluate_genome_disjoint_knn(features, labels, genome_ids, k=1)
+        self.assertEqual(result["excluded_species_labels"], [2])
+        self.assertEqual(result["n_single_genome_species_excluded"], 1)
 
 
 class NotebookContractTests(unittest.TestCase):

@@ -549,6 +549,7 @@ def evaluate_genome_disjoint_knn(
         "accuracy_drop_percentage_points": acc_drop * 100.0,
         "n_multi_genome_species": len(multi_genome_species),
         "n_single_genome_species_excluded": len(single_genome_species),
+        "excluded_species_labels": sorted(single_genome_species, key=str),
         "n_reference_samples": len(X_ref),
         "n_query_samples": len(X_query),
         "zero_accession_overlap": True,

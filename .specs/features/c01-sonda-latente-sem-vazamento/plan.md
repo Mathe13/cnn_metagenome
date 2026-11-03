@@ -23,11 +23,12 @@ Reutiliza a extração pré-`fc`, o KNN, o Silhouette e a sonda em `viral_cnn.ev
 
 1. Configuração e entradas → notebook 06 e `viral_cnn.notebook_runtime` (exists): preflight específico de treino/validação/teste, taxonomia e cinco variantes Species; reserva saída exclusiva e identifica dependência taxonômica de outra execução.
 2. Partições explícitas → `viral_cnn.data.parquet_dataset.ParquetBatchIterableDataset` (exists): lotes sem embaralhamento para extração, com identidade de linha vinculada à partição e ordem de leitura observada.
-3. Modelo registrado e lotes → `extract_latent_embeddings` em `viral_cnn.eval.latent` (exists): captura entrada real de `fc`, associa rótulos e identidades, e persiste artefato por variante/split com proveniência verificável (door 1).
-4. Artefatos train/validation → `LinearProbeClassifier` em `viral_cnn.eval.latent` (exists): valida proveniência, ajusta no treino e seleciona pesos pela validação; sela o resultado antes de consumir o teste (door 2).
-5. Sonda selada e artefato test → `LinearProbeClassifier.evaluate` e notebook 06 (exists): avaliam a sonda e a cabeça nativa sobre os mesmos exemplos do teste e exportam contagens, métricas e identidades da avaliação final.
-6. Artefato test → `evaluate_cosine_knn`, `evaluate_silhouette_with_audit` e `calculate_taxonomic_correlations` (exists): produzem Tabelas 5/6 com partições e suportes auditados; UMAP permanece uma saída qualitativa separada.
-7. Produtos e trilha de seleção → `write_notebook_manifest` (exists): registra configuração, hashes, suportes, saídas e limites de evidência no namespace C00, sem substituir resultados históricos.
+3. Modelo registrado e partições train/validation → `extract_latent_embeddings` em `viral_cnn.eval.latent` (exists): captura entrada real de `fc`, associa rótulos e identidades, e persiste apenas os dois artefatos de ajuste/seleção com proveniência verificável (door 1).
+4. Artefatos train/validation → `LinearProbeClassifier` em `viral_cnn.eval.latent` (exists): valida proveniência, ajusta no treino e seleciona pesos pela validação; sela o hash antes de abrir o split test (door 2).
+5. Modelo registrado e partição test, após a sonda selada → `extract_latent_embeddings` (exists): extrai e persiste o artefato test e os logits nativos, sem expor seus exemplos ao ajuste/seleção.
+6. Sonda selada e artefato test → `LinearProbeClassifier.evaluate_artifact` e notebook 06 (exists): avaliam a sonda e a cabeça nativa sobre os mesmos exemplos do teste e exportam contagens, métricas e identidades da avaliação final.
+7. Artefato test → `evaluate_cosine_knn`, `evaluate_silhouette_with_audit` e `calculate_taxonomic_correlations` (exists): produzem Tabelas 5/6 com partições e suportes auditados; UMAP permanece uma saída qualitativa separada.
+8. Produtos e trilha de seleção → `write_notebook_manifest` (exists): registra configuração, hashes, suportes, saídas e limites de evidência no namespace C00, sem substituir resultados históricos.
 
 ## Impact
 
