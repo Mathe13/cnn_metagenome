@@ -7,6 +7,11 @@ and independent linear probing.
 from __future__ import annotations
 
 import math
+import hashlib
+import json
+import os
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -16,6 +21,92 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+@dataclass
+class EmbeddingArtifact:
+    """Embeddings plus the provenance needed by the audited evaluation path."""
+
+    features: np.ndarray
+    labels: np.ndarray
+    row_ids: np.ndarray
+    manifest: Dict[str, Any]
+
+    def validate(self) -> None:
+        n = len(self.features)
+        if len(self.labels) != n or len(self.row_ids) != n:
+            raise ValueError("Embedding artifact features, labels, and row identities have different lengths")
+        if not self.manifest.get("verified"):
+            raise ValueError("Embedding artifact provenance is not verified")
+        if self.manifest.get("split") not in {"train", "validation", "test"}:
+            raise ValueError(f"Invalid embedding split: {self.manifest.get('split')!r}")
+
+
+def _sha256_file(path: Union[str, Path]) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def save_embedding_artifact(artifact: EmbeddingArtifact, cache_prefix: Union[str, Path]) -> Path:
+    """Write immutable split-specific parquet and JSON provenance sidecar."""
+    artifact.validate()
+    prefix = Path(cache_prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    fingerprint = hashlib.sha256(json.dumps(artifact.manifest, sort_keys=True).encode()).hexdigest()
+    parquet_path = prefix.with_name(f"{prefix.name}_{artifact.manifest['variant']}_{artifact.manifest['split']}_{fingerprint}.parquet")
+    manifest_path = parquet_path.with_suffix(".json")
+    if parquet_path.exists() or manifest_path.exists():
+        raise FileExistsError(f"Refusing to overwrite existing embedding artifact: {parquet_path}")
+    frame = pd.DataFrame({"features": list(artifact.features), "label": artifact.labels, "row_id": artifact.row_ids})
+    print(f"[LOG_PATH] Saving embedding artifact to: {parquet_path.resolve()}")
+    with tempfile.NamedTemporaryFile(dir=prefix.parent, suffix=".parquet", delete=False) as temp:
+        temp_path = Path(temp.name)
+    try:
+        frame.to_parquet(temp_path, index=False)
+        os.replace(temp_path, parquet_path)
+        manifest = dict(artifact.manifest, schema_version=1, artifact_sha256=_sha256_file(parquet_path), fingerprint=fingerprint)
+        temp_manifest = manifest_path.with_suffix(".json.tmp")
+        temp_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        os.replace(temp_manifest, manifest_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return parquet_path
+
+
+def load_embedding_artifact(path: Union[str, Path], expected: Dict[str, Any]) -> EmbeddingArtifact:
+    """Load a cache only after the full expected provenance identity matches."""
+    required_identity = {
+        "variant", "split", "partitions", "partition_sha256", "checkpoint", "checkpoint_sha256",
+        "class_order", "encoding", "sampling", "mode", "extractor_code_sha256",
+    }
+    missing = required_identity - set(expected)
+    if missing:
+        raise ValueError(f"Cache identity is incomplete; missing expected fields: {sorted(missing)}")
+    path = Path(path)
+    print(f"[LOG_PATH] Loading embedding artifact from: {path.resolve()}")
+    manifest_path = path.with_suffix(".json")
+    if not path.is_file() or not manifest_path.is_file():
+        raise ValueError(f"Legacy or incomplete embedding cache (data/manifest missing): {path}")
+    manifest = json.loads(manifest_path.read_text())
+    missing_manifest = required_identity - set(manifest)
+    if missing_manifest:
+        raise ValueError(f"Cache manifest is incomplete: {sorted(missing_manifest)}")
+    fingerprint_payload = {key: value for key, value in manifest.items() if key not in {"schema_version", "artifact_sha256", "fingerprint"}}
+    actual_fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True).encode()).hexdigest()
+    if manifest.get("fingerprint") != actual_fingerprint:
+        raise ValueError(f"Embedding cache fingerprint mismatch: {path}")
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            raise ValueError(f"Stale embedding cache {path}: {key} expected {value!r}, found {manifest.get(key)!r}")
+    if manifest.get("artifact_sha256") != _sha256_file(path):
+        raise ValueError(f"Corrupt embedding cache checksum: {path}")
+    frame = pd.read_parquet(path)
+    artifact = EmbeddingArtifact(np.stack(frame.features.to_numpy()), frame.label.to_numpy(), frame.row_id.to_numpy(), manifest)
+    artifact.validate()
+    return artifact
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +176,10 @@ def extract_latent_embeddings(
     model: nn.Module,
     dataloader: Any,
     device: str = "cpu",
-) -> Tuple[np.ndarray, np.ndarray]:
+    *,
+    return_identities: bool = False,
+    return_logits: bool = False,
+) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, ...]]:
     """
     Extracts high-dimensional pre-classifier embeddings by registering a forward
     pre-hook on `model.fc`. Returns (features, labels) as NumPy arrays.
@@ -99,6 +193,8 @@ def extract_latent_embeddings(
 
     features_list: List[np.ndarray] = []
     labels_list: List[np.ndarray] = []
+    identities_list: List[np.ndarray] = []
+    logits_list: List[np.ndarray] = []
 
     def pre_hook_fn(module: nn.Module, inputs: Tuple[torch.Tensor, ...]) -> None:
         feat = inputs[0].detach().cpu().to(torch.float32).numpy()
@@ -111,28 +207,58 @@ def extract_latent_embeddings(
             for batch in dataloader:
                 if isinstance(batch, (tuple, list)) and len(batch) >= 2:
                     inputs, labels = batch[0], batch[1]
+                    row_ids = batch[2] if len(batch) >= 3 else None
                 elif isinstance(batch, dict):
                     inputs = batch["sequence"] if "sequence" in batch else batch["inputs"]
                     labels = batch["label"] if "label" in batch else batch["labels"]
+                    row_ids = batch.get("row_id", batch.get("row_ids"))
                 else:
                     raise ValueError(f"Unrecognized batch format from dataloader: {type(batch)}")
 
                 inputs = inputs.to(dev)
-                _ = model(inputs)
+                logits = model(inputs)
+                if return_logits:
+                    logits_list.append(logits.detach().cpu().to(torch.float32).numpy())
 
                 if isinstance(labels, torch.Tensor):
                     labels_list.append(labels.detach().cpu().numpy())
                 else:
                     labels_list.append(np.asarray(labels))
+                if return_identities:
+                    if row_ids is None:
+                        raise ValueError("Identity-aware extraction requires row IDs from the source dataset")
+                    identities_list.append(np.asarray(row_ids, dtype=str))
     finally:
         handle.remove()
 
     if not features_list:
-        return np.empty((0, target_model.fc.in_features), dtype=np.float32), np.empty((0,), dtype=np.int64)
+        empty = (np.empty((0, target_model.fc.in_features), dtype=np.float32), np.empty((0,), dtype=np.int64))
+        extra = (np.empty((0,), dtype=str),) if return_identities else ()
+        extra += (np.empty((0, target_model.fc.out_features), dtype=np.float32),) if return_logits else ()
+        return (*empty, *extra)
 
     all_features = np.concatenate(features_list, axis=0)
     all_labels = np.concatenate(labels_list, axis=0)
-    return all_features, all_labels
+    if not (len(all_features) == len(all_labels)):
+        raise RuntimeError("Feature and label counts diverged during extraction")
+    if return_identities:
+        all_ids = np.concatenate(identities_list)
+        if len(all_ids) != len(all_features):
+            raise RuntimeError("Feature and row identity counts diverged during extraction")
+    else:
+        all_ids = None
+    if return_logits:
+        all_logits = np.concatenate(logits_list)
+        if len(all_logits) != len(all_features):
+            raise RuntimeError("Feature and logit counts diverged during extraction")
+    else:
+        all_logits = None
+    result: Tuple[Any, ...] = (all_features, all_labels)
+    if return_identities:
+        result += (all_ids,)
+    if return_logits:
+        result += (all_logits,)
+    return result
 
 
 def evaluate_cosine_knn(
@@ -144,17 +270,33 @@ def evaluate_cosine_knn(
     batch_size: int = 1000,
     device: str = "cpu",
     taxonomic_rank: str = "Species",
+    row_ids: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     Evaluates k-nearest neighbor classification accuracy using cosine similarity on
     a stratified 80/20 reference/query split. Guaranteed zero self-neighbor presence.
     """
     n_samples = len(features)
+    labels = np.asarray(labels)
+    if len(labels) != n_samples:
+        raise ValueError("Length mismatch between features and labels")
+    ids = np.asarray(row_ids if row_ids is not None else [f"row:{i}" for i in range(n_samples)], dtype=str)
+    if len(ids) != n_samples:
+        raise ValueError("row_ids length must match features and labels")
     if n_samples < 2:
-        raise ValueError(f"Cannot evaluate KNN on {n_samples} samples; require >= 2")
+        return {
+            "taxonomic_rank": taxonomic_rank, "available": False,
+            "unavailable_reason": "no_stratified_queries", "global_knn_accuracy": float("nan"),
+            "global_knn_top5_accuracy": float("nan"), "per_cluster_metrics": pd.DataFrame(),
+            "k_requested": k, "k": 0, "n_reference": n_samples, "n_query": 0,
+            "n_classes_total": len(np.unique(labels)), "n_classes_with_query": 0,
+            "n_classes_reference_only": len(np.unique(labels)), "reference_indices": np.arange(n_samples),
+            "query_indices": np.empty(0, dtype=np.intp), "reference_ids": ids,
+            "query_ids": np.empty(0, dtype=str), "identity_overlap_count": 0,
+            "zero_self_neighbor": True, "top5_definition": "true label appears among the requested nearest-neighbor labels",
+        }
 
     rng = np.random.default_rng(random_state)
-    labels = np.asarray(labels)
 
     # Stratified 80/20 train/test split (reference / query)
     unique_classes, counts = np.unique(labels, return_counts=True)
@@ -174,13 +316,6 @@ def evaluate_cosine_knn(
         else:
             ref_indices.extend(cls_idx)
 
-    # In case no queries were allocated due to all singletons, fallback
-    if len(query_indices) == 0:
-        perm = rng.permutation(n_samples)
-        split_pt = max(1, int(round(n_samples * (1.0 - test_size))))
-        ref_indices = perm[:split_pt].tolist()
-        query_indices = perm[split_pt:].tolist()
-
     ref_idx_arr = np.array(ref_indices, dtype=np.intp)
     query_idx_arr = np.array(query_indices, dtype=np.intp)
 
@@ -188,6 +323,24 @@ def evaluate_cosine_knn(
     overlap = set(ref_indices).intersection(set(query_indices))
     if len(overlap) > 0:
         raise RuntimeError("Reference and query index partitions must be strictly disjoint")
+
+    identity_overlap = set(ids[ref_idx_arr]).intersection(ids[query_idx_arr])
+    if identity_overlap:
+        raise ValueError(f"Operational row identities overlap between KNN reference and query: {next(iter(identity_overlap))}")
+    if len(query_idx_arr) == 0 or len(ref_idx_arr) < k:
+        return {
+            "taxonomic_rank": taxonomic_rank, "available": False,
+            "global_knn_accuracy": float("nan"), "global_knn_top5_accuracy": float("nan"),
+            "per_cluster_metrics": pd.DataFrame(columns=["class_label", "test_samples", "knn_accuracy", "knn_top5_accuracy", "taxonomic_rank"]),
+            "unavailable_reason": "no_stratified_queries" if len(query_idx_arr) == 0 else "fewer_than_requested_neighbors",
+            "k_requested": k, "k": 0, "n_reference": len(ref_idx_arr), "n_query": len(query_idx_arr),
+            "n_classes_total": len(unique_classes), "n_classes_with_query": len(set(labels[query_idx_arr].tolist())),
+            "n_classes_reference_only": len(unique_classes) - len(set(labels[query_idx_arr].tolist())),
+            "reference_indices": ref_idx_arr, "query_indices": query_idx_arr,
+            "reference_ids": ids[ref_idx_arr], "query_ids": ids[query_idx_arr],
+            "identity_overlap_count": len(identity_overlap), "zero_self_neighbor": len(identity_overlap) == 0,
+            "top5_definition": "true label appears among the requested nearest-neighbor labels",
+        }
 
     X_ref = torch.as_tensor(features[ref_idx_arr], dtype=torch.float32)
     y_ref = torch.as_tensor(labels[ref_idx_arr], dtype=torch.long)
@@ -198,15 +351,17 @@ def evaluate_cosine_knn(
     X_ref = F.normalize(X_ref.to(dev), p=2, dim=1)
     y_ref = y_ref.to(dev)
 
-    k_eff = min(k, len(X_ref))
+    k_eff = k
     preds_list: List[torch.Tensor] = []
     top5_hits_list: List[torch.Tensor] = []
+    neighbor_indices_list: List[np.ndarray] = []
 
     for i in range(0, len(X_query), batch_size):
         batch_x = F.normalize(X_query[i : i + batch_size].to(dev), p=2, dim=1)
         sim = torch.mm(batch_x, X_ref.T)
 
         topk = torch.topk(sim, k=k_eff, dim=1, largest=True)
+        neighbor_indices_list.append(ref_idx_arr[topk.indices.cpu().numpy()])
         topk_labels = y_ref[topk.indices]
 
         # Majority vote with deterministic tie-breaking (mode)
@@ -221,6 +376,10 @@ def evaluate_cosine_knn(
     y_pred = torch.cat(preds_list).numpy()
     y_true = y_query.numpy()
     top5_correct = torch.cat(top5_hits_list).numpy() if top5_hits_list else np.empty((0,), dtype=bool)
+    neighbor_indices = np.concatenate(neighbor_indices_list, axis=0)
+    self_neighbor_count = int(sum(q in row for q, row in zip(query_idx_arr, neighbor_indices)))
+    if self_neighbor_count:
+        raise RuntimeError("A query identity appeared among its own KNN reference neighbors")
 
     correct = (y_pred == y_true)
     global_acc = float(np.mean(correct)) if len(correct) > 0 else 0.0
@@ -252,7 +411,23 @@ def evaluate_cosine_knn(
         "k": k_eff,
         "n_reference": len(X_ref),
         "n_query": len(X_query),
-        "zero_self_neighbor": True,
+        "zero_self_neighbor": self_neighbor_count == 0 and len(identity_overlap) == 0,
+        "available": True,
+        "k_requested": k,
+        "n_classes_total": len(unique_classes),
+        "n_classes_with_query": len(np.unique(y_true)),
+        "n_classes_reference_only": len(unique_classes) - len(np.unique(y_true)),
+        "reference_indices": ref_idx_arr,
+        "query_indices": query_idx_arr,
+        "reference_ids": ids[ref_idx_arr],
+        "query_ids": ids[query_idx_arr],
+        "neighbor_indices": neighbor_indices,
+        "neighbor_ids": ids[neighbor_indices],
+        "self_neighbor_count": self_neighbor_count,
+        "identity_overlap_count": len(identity_overlap),
+        "reference_fraction": len(ref_idx_arr) / n_samples,
+        "query_fraction": len(query_idx_arr) / n_samples,
+        "top5_definition": "true label appears among the requested nearest-neighbor labels",
         "y_true": y_true,
         "y_pred": y_pred,
         "per_cluster_metrics": cluster_summary,
@@ -509,6 +684,7 @@ def evaluate_silhouette_with_audit(
     return {
         "taxonomic_rank": taxonomic_rank,
         "global_silhouette_score": global_sil,
+        "valid_class_rate": len(valid_classes) / len(all_classes) if len(all_classes) else 0.0,
         "sampling_strategy": sampling_strategy,
         "target_sample_size": max_samples,
         "actual_sample_size": len(sub_labels),
@@ -654,6 +830,116 @@ class LinearProbeClassifier(nn.Module):
     def __init__(self, in_features: int, num_classes: int) -> None:
         super().__init__()
         self.fc = nn.Linear(in_features, num_classes)
+        self._audit_state = "UNFITTED"
+        self._sealed_sha256: Optional[str] = None
+        self._test_evaluated = False
+        self._selection_history: List[Dict[str, float]] = []
+        self._training_row_ids: set = set()
+        self._validation_row_ids: set = set()
+
+    @staticmethod
+    def _state_hash(module: nn.Module) -> str:
+        digest = hashlib.sha256()
+        for name, tensor in sorted(module.state_dict().items()):
+            digest.update(name.encode())
+            digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+        return digest.hexdigest()
+
+    def fit_select_and_seal(
+        self,
+        train: EmbeddingArtifact,
+        validation: EmbeddingArtifact,
+        *,
+        epochs: int = 10,
+        lr: float = 1e-3,
+        weight_decay: float = 1e-4,
+        batch_size: int = 256,
+        seed: int = 42,
+        device: str = "cpu",
+    ) -> Dict[str, Any]:
+        """Fit only on verified train rows, select by validation accuracy, then freeze the protocol."""
+        if self._audit_state != "UNFITTED":
+            raise RuntimeError(f"Probe cannot be fitted in state {self._audit_state}")
+        train.validate()
+        validation.validate()
+        if train.manifest["split"] != "train" or validation.manifest["split"] != "validation":
+            raise ValueError("Audited probe requires train and validation embedding artifacts")
+        if train.manifest.get("variant") != validation.manifest.get("variant"):
+            raise ValueError("Train and validation artifacts belong to different model variants")
+        if set(train.row_ids).intersection(validation.row_ids):
+            raise ValueError("Train and validation row identities overlap")
+        if train.features.shape[1] != self.fc.in_features or validation.features.shape[1] != self.fc.in_features:
+            raise ValueError("Embedding dimensions do not match the probe input dimension")
+        if np.any(train.labels < 0) or np.any(train.labels >= self.fc.out_features):
+            raise ValueError("Train labels are outside the probe class range")
+        if np.any(validation.labels < 0) or np.any(validation.labels >= self.fc.out_features):
+            raise ValueError("Validation labels are outside the probe class range")
+        torch.manual_seed(seed)
+        dev = torch.device(device)
+        self.to(dev)
+        X = torch.as_tensor(train.features, dtype=torch.float32)
+        y = torch.as_tensor(train.labels, dtype=torch.long)
+        loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(X, y), batch_size=batch_size, shuffle=True)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
+        criterion = nn.CrossEntropyLoss()
+        best_accuracy = -1.0
+        best_state = None
+        X_val = torch.as_tensor(validation.features, dtype=torch.float32, device=dev)
+        y_val = np.asarray(validation.labels, dtype=np.int64)
+        for epoch in range(epochs):
+            self.train()
+            for bx, by in loader:
+                bx, by = bx.to(dev), by.to(dev)
+                optimizer.zero_grad(set_to_none=True)
+                criterion(self(bx), by).backward()
+                optimizer.step()
+            self.eval()
+            with torch.inference_mode():
+                val_pred = self(X_val).argmax(dim=1).cpu().numpy()
+            accuracy = float(np.mean(val_pred == y_val)) if len(y_val) else 0.0
+            self._selection_history.append({"epoch": epoch + 1, "validation_accuracy": accuracy})
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_state = {name: value.detach().cpu().clone() for name, value in self.state_dict().items()}
+        if best_state is None:
+            raise ValueError("Validation artifact is empty; cannot select probe weights")
+        self.load_state_dict(best_state)
+        self._training_row_ids = set(train.row_ids.tolist())
+        self._validation_row_ids = set(validation.row_ids.tolist())
+        self.eval()
+        self._audit_state = "SEALED"
+        self._sealed_sha256 = self._state_hash(self)
+        return {
+            "probe_protocol": "c01_train_val_frozen_v1",
+            "state": self._audit_state,
+            "selected_epoch": int(max(self._selection_history, key=lambda item: item["validation_accuracy"])['epoch']),
+            "selection_rule": "maximum validation Accuracy; earliest epoch wins ties",
+            "selection_history": list(self._selection_history),
+            "weights_sha256": self._sealed_sha256,
+            "train_manifest": dict(train.manifest),
+            "validation_manifest": dict(validation.manifest),
+        }
+
+    def evaluate_artifact(self, test: EmbeddingArtifact, device: str = "cpu") -> Dict[str, Any]:
+        """Evaluate once on a verified test artifact after the selected weights are sealed."""
+        if self._test_evaluated:
+            raise RuntimeError("Sealed probe test evaluation may occur only once")
+        if self._audit_state != "SEALED" or self._sealed_sha256 is None:
+            raise RuntimeError("Probe must be selected and sealed before test evaluation")
+        test.validate()
+        if test.manifest["split"] != "test":
+            raise ValueError("Final probe evaluation requires a test embedding artifact")
+        test_ids = set(test.row_ids.tolist())
+        if test_ids.intersection(self._training_row_ids) or test_ids.intersection(self._validation_row_ids):
+            raise ValueError("Test row identities overlap train or validation probe examples")
+        if self._state_hash(self) != self._sealed_sha256:
+            raise RuntimeError("Sealed probe weights changed before test evaluation")
+        result = self.evaluate(test.features, test.labels, device=device)
+        result.update({"row_ids": test.row_ids.tolist(), "weights_sha256": self._sealed_sha256,
+                       "supported_classes": int(np.unique(test.labels).size), "probe_protocol": "c01_train_val_frozen_v1"})
+        self._test_evaluated = True
+        self._audit_state = "TEST_EVALUATED"
+        return result
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.fc(x)
@@ -677,6 +963,8 @@ class LinearProbeClassifier(nn.Module):
             raise ValueError(
                 "Violation of scientific invariant: LinearProbeClassifier cannot be trained on test set embeddings"
             )
+        if self._audit_state != "UNFITTED":
+            raise RuntimeError(f"Probe cannot be fitted in state {self._audit_state}")
 
         dev = torch.device(device)
         self.to(dev)

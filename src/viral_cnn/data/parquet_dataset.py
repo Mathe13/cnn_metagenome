@@ -12,6 +12,7 @@ Scientific and engineering invariants (AGENTS.md, AD-003, AD-006):
 from __future__ import annotations
 
 import logging
+import hashlib
 import math
 from pathlib import Path
 import random
@@ -54,6 +55,8 @@ class ParquetBatchIterableDataset(IterableDataset):
         debug: bool = False,
         split: Optional[str] = None,
         max_samples: Optional[int] = None,
+        include_identity: bool = False,
+        partition_ids: Optional[dict] = None,
     ):
         super().__init__()
         if isinstance(file_paths, (str, Path)):
@@ -103,6 +106,20 @@ class ParquetBatchIterableDataset(IterableDataset):
         self.debug = debug
         self.split = split
         self.max_samples = max_samples
+        self.include_identity = include_identity
+        self._partition_ids = {}
+        if self.include_identity:
+            for raw_path in self.file_paths:
+                supplied_id = (partition_ids or {}).get(str(raw_path)) or (partition_ids or {}).get(str(Path(raw_path).resolve()))
+                if supplied_id:
+                    self._partition_ids[str(raw_path)] = supplied_id
+                else:
+                    partition_path = Path(raw_path).resolve()
+                    digest = hashlib.sha256()
+                    with partition_path.open("rb") as stream:
+                        for block in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(block)
+                    self._partition_ids[str(raw_path)] = digest.hexdigest()
 
         self.mapping = {n: i for i, n in enumerate(self.nucleotides)}
         self.num_features = len(self.nucleotides)
@@ -153,7 +170,7 @@ class ParquetBatchIterableDataset(IterableDataset):
             f"None of the candidate sequence columns {candidates} found in partition columns: {list(available_columns)}"
         )
 
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, ...]]:
         worker_info = get_worker_info()
 
         if worker_info is None:
@@ -189,7 +206,9 @@ class ParquetBatchIterableDataset(IterableDataset):
                 use_cudf = False
 
             it = self._iter_cudf(file_path) if use_cudf else self._iter_cpu(file_path)
-            for bx, by in it:
+            for batch in it:
+                bx, by = batch[0], batch[1]
+                row_ids = batch[2] if len(batch) > 2 else None
                 if self.max_samples is not None and self.max_samples > 0:
                     rem = self.max_samples - yielded_samples
                     if rem <= 0:
@@ -197,8 +216,10 @@ class ParquetBatchIterableDataset(IterableDataset):
                     if bx.shape[0] > rem:
                         bx = bx[:rem]
                         by = by[:rem]
+                        if row_ids is not None:
+                            row_ids = row_ids[:rem]
                 yielded_samples += int(bx.shape[0])
-                yield bx, by
+                yield (bx, by, row_ids) if row_ids is not None else (bx, by)
                 if self.max_samples is not None and self.max_samples > 0 and yielded_samples >= self.max_samples:
                     return
 
@@ -230,7 +251,7 @@ class ParquetBatchIterableDataset(IterableDataset):
         ]
         return torch.tensor(tokenized_list, dtype=torch.long)
 
-    def _iter_cpu(self, file_path: str) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    def _iter_cpu(self, file_path: str) -> Iterator[Tuple[torch.Tensor, ...]]:
         try:
             pf = pq.ParquetFile(file_path)
             schema_names = pf.schema_arrow.names
@@ -242,6 +263,8 @@ class ParquetBatchIterableDataset(IterableDataset):
             return
 
         try:
+            partition_id = self._partition_ids[file_path]
+            row_ordinal = 0
             for record_batch in pf.iter_batches(batch_size=self.batch_size, columns=cols_to_load):
                 inputs_list = record_batch.column(seq_col).to_pylist()
                 if not inputs_list:
@@ -253,12 +276,17 @@ class ParquetBatchIterableDataset(IterableDataset):
                     labels_tensor = torch.zeros(len(inputs_list), dtype=torch.long)
 
                 inputs_tensor = self._tokenize_batch(inputs_list)
-                yield inputs_tensor, labels_tensor
+                if self.include_identity:
+                    row_ids = [f"{partition_id}:{row_ordinal + i}" for i in range(len(inputs_list))]
+                    yield inputs_tensor, labels_tensor, row_ids
+                else:
+                    yield inputs_tensor, labels_tensor
+                row_ordinal += len(inputs_list)
         except Exception as e:
             logger.error(f"Failed while iterating parquet partition {file_path}: {e}")
             return
 
-    def _iter_cudf(self, file_path: str) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    def _iter_cudf(self, file_path: str) -> Iterator[Tuple[torch.Tensor, ...]]:
         try:
             import cudf
             partition_df = cudf.read_parquet(file_path)
@@ -274,6 +302,7 @@ class ParquetBatchIterableDataset(IterableDataset):
         seq_col = self._resolve_sequence_column(partition_df.columns)
         has_label = self.label_column in partition_df.columns
         num_rows = len(partition_df)
+        partition_id = self._partition_ids[file_path] if self.include_identity else ""
 
         for i in range(0, num_rows, self.batch_size):
             end_index = min(i + self.batch_size, num_rows)
@@ -287,7 +316,11 @@ class ParquetBatchIterableDataset(IterableDataset):
                 labels_tensor = torch.zeros(len(inputs_list), dtype=torch.long)
 
             inputs_tensor = self._tokenize_batch(inputs_list)
-            yield inputs_tensor, labels_tensor
+            if self.include_identity:
+                row_ids = [f"{partition_id}:{i}" for i in range(i, end_index)]
+                yield inputs_tensor, labels_tensor, row_ids
+            else:
+                yield inputs_tensor, labels_tensor
 
 
 ParquetCPUDataset = ParquetBatchIterableDataset

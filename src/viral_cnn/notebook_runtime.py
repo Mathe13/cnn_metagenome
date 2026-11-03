@@ -244,6 +244,48 @@ NOTEBOOK_REQUIREMENTS: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+def preflight_latent_inputs(
+    split_files: Dict[str, Sequence[Union[str, Path]]],
+    taxonomy: pd.DataFrame,
+    checkpoint_paths: Dict[str, Union[str, Path]],
+    required_variants: Sequence[str],
+) -> Dict[str, Any]:
+    """Fail before latent metrics if any empirical split, taxonomy label, or checkpoint is absent."""
+    required_splits = ("train", "validation", "test")
+    for split in required_splits:
+        files = [Path(path).expanduser().resolve() for path in split_files.get(split, [])]
+        if not files:
+            raise FileNotFoundError(f"Required nonempty {split} split has no parquet partitions")
+        missing = [path for path in files if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(f"Missing {split} partition: {missing[0]}")
+        if len({str(path) for path in files}) != len(files):
+            raise ValueError(f"Duplicate partition path in {split} split")
+    split_paths = {split: {str(Path(p).expanduser().resolve()) for p in split_files[split]} for split in required_splits}
+    for left, right in (("train", "validation"), ("train", "test"), ("validation", "test")):
+        overlap = split_paths[left].intersection(split_paths[right])
+        if overlap:
+            raise ValueError(f"Partition alias between {left} and {right}: {sorted(overlap)[0]}")
+    needed_columns = {"model_label", "Genus", "Order"}
+    absent = needed_columns - set(taxonomy.columns)
+    if absent:
+        raise ValueError(f"Taxonomy missing required columns: {sorted(absent)}")
+    if taxonomy.empty or taxonomy["model_label"].isna().any():
+        raise ValueError("Taxonomy is empty or contains missing model_label values")
+    for rank in ("Genus", "Order"):
+        if taxonomy[rank].isna().any():
+            first_label = int(taxonomy.loc[taxonomy[rank].isna(), "model_label"].iloc[0])
+            raise ValueError(f"Taxonomy has missing {rank} mapping for model label {first_label}")
+    if taxonomy["model_label"].duplicated().any():
+        raise ValueError("Taxonomy contains duplicate model_label values")
+    for name in required_variants:
+        path = Path(checkpoint_paths.get(name, "")).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"Required checkpoint for '{name}' not found at: {path}")
+    return {"status": "READY", "splits": {k: [str(Path(p).resolve()) for p in split_files[k]] for k in required_splits},
+            "taxonomy_labels": int(taxonomy.model_label.nunique()), "variants": list(required_variants)}
+
+
 def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
     """Resolve a dotted requirement key from the canonical topology."""
     if key.startswith("results_reproduction/"):
