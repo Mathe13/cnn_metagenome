@@ -21,3 +21,4 @@
 
 - `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_r08_reconciliation_and_tables.py` - 6 passed, 0 failed
 - `PYTHONPATH=src .venv/bin/python3 -m unittest tests/test_manuscript_compilation.py` - 8 passed, 0 failed
+
