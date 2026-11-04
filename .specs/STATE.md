@@ -32,9 +32,9 @@
 
 ## Handoff
 **Feature**: c08-knn-bounded-workspace
-**Where**: implementação KNN em blocos, auditoria compacta e controles do notebook concluídos; testes e verificação independente em andamento.
+**Where**: C1–C13 implementados; verificação independente PASS (perfil light, gate com 0 erros/avisos), 62 testes locais relevantes e smoke sintético concluídos.
 **In progress**: validação empírica remota ainda não executada.
-**Next step**: concluir verificação independente C08; depois rodar notebook 06 no cluster com dados e checkpoints canônicos, comparar métricas e comportamento de memória antes de afirmar reprodução científica.
+**Next step**: rodar notebook 06 no cluster com dados e checkpoints canônicos, comparar métricas e comportamento de memória antes de afirmar reprodução científica.
 **Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
-**Uncommitted**: arquivos C08 em andamento; artefatos locais preexistentes permanecem preservados.
+**Uncommitted**: nenhum arquivo de implementação C08; artefatos locais preexistentes permanecem preservados.
 **Branch**: main
