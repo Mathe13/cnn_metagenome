@@ -27,9 +27,9 @@
 ## Handoff
 
 **Feature**: c01-sonda-latente-sem-vazamento
-**Where**: Implementation in progress; checks frozen at profile `light`. Focused local proofs and notebook smoke execution pass; independent verification and empirical validation remain pending.
-**In progress**: C01 implementation, notebook 06 and KNN audit integration
-**Next step**: Run the independent verifier, validate its report, then complete C01 handoff
-**Blockers**: Remote data root `/home/mlima/workspace` and five Species checkpoints were unavailable locally; no empirical claim is certified.
+**Where**: Implementation complete and independently verified at profile `light`; C1-C13 pass. Empirical validation remains pending.
+**In progress**: none
+**Next step**: For empirical validation, run notebook 06 against the remote data root and all five Species checkpoints; confirm genome IDs before making genome-independence claims.
+**Blockers**: Remote data root `/home/mlima/workspace`, five Species checkpoints, and test-fragment genome IDs were unavailable locally; no empirical claim is certified.
 **Uncommitted**: none
 **Branch**: main
