@@ -510,6 +510,44 @@ def extract_latent_embeddings(
     return result
 
 
+def _knn_workspace_bytes(query_rows: int, reference_rows: int, dimension: int, k: int) -> int:
+    """Conservative bound for explicit gather, normalization, score and key tensors."""
+    return 12 * dimension * (query_rows + reference_rows) + 64 * query_rows * reference_rows + 64 * query_rows * k
+
+
+def _knn_ordered_keys(similarity: torch.Tensor, original_indices: torch.Tensor) -> torch.Tensor:
+    """Encode float32 score and smallest original index as one sortable int64 key."""
+    bits = similarity.contiguous().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+    ordered = torch.where((bits & 0x80000000) != 0, (~bits) & 0xFFFFFFFF, bits ^ 0x80000000)
+    ordered = torch.where(similarity == 0, 0x80000000, ordered) - 0x80000000
+    return ordered * (1 << 32) + (0xFFFFFFFF - original_indices[None, :])
+
+
+def _hash_ordered_ids(ids: np.ndarray, indices: np.ndarray) -> str:
+    """Hash ordered identities without allocating their full selected array."""
+    digest = hashlib.sha256()
+    for start in range(0, len(indices), 8192):
+        digest.update(np.asarray(ids[indices[start:start + 8192]]).tobytes())
+    return digest.hexdigest()
+
+
+def save_knn_identity_audit(evaluations: List[Dict[str, Any]], path: Union[str, Path]) -> Path:
+    """Atomically publish the compact C08 KNN audit JSON for one notebook run."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise FileExistsError(f"Refusing to overwrite KNN audit: {target}")
+    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".tmp", delete=False) as temp:
+        temporary = Path(temp.name)
+    try:
+        temporary.write_text(json.dumps({"schema_version": "c08_knn_audit_v1", "evaluations": evaluations}, indent=2) + "\n")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    log_artifact_path("KNN identity audit", target)
+    return target
+
+
 def evaluate_cosine_knn(
     features: np.ndarray,
     labels: np.ndarray,
@@ -520,167 +558,236 @@ def evaluate_cosine_knn(
     device: str = "cpu",
     taxonomic_rank: str = "Species",
     row_ids: Optional[np.ndarray] = None,
+    *,
+    workspace_mb: int = 1024,
+    query_batch_size: Optional[int] = None,
+    reference_batch_size: Optional[int] = None,
+    selected_indices: Optional[np.ndarray] = None,
+    compact: bool = False,
+    audit_output_path: Optional[Union[str, Path]] = None,
+    embedding_artifact_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Evaluates k-nearest neighbor classification accuracy using cosine similarity on
-    a stratified 80/20 reference/query split. Guaranteed zero self-neighbor presence.
-    """
-    n_samples = len(features)
+    """Evaluate exact cosine KNN with bounded reference/query tiles and C08 audit."""
+    if not isinstance(workspace_mb, int) or isinstance(workspace_mb, bool) or workspace_mb < 1:
+        raise ValueError("workspace_mb must be a positive integer number of MiB")
+    if query_batch_size is None:
+        query_batch_size = batch_size
+    if not isinstance(query_batch_size, int) or isinstance(query_batch_size, bool) or query_batch_size < 1:
+        raise ValueError("query_batch_size must be a positive integer")
+    if reference_batch_size is not None and (
+        not isinstance(reference_batch_size, int) or isinstance(reference_batch_size, bool) or reference_batch_size < 1
+    ):
+        raise ValueError("reference_batch_size must be a positive integer")
+    if not isinstance(k, int) or k < 1:
+        raise ValueError("k must be a positive integer")
+    if audit_output_path is not None and not embedding_artifact_sha256:
+        raise ValueError("embedding_artifact_sha256 is required for a persisted KNN audit")
+    if len(features.shape) != 2 or features.shape[1] < 1:
+        raise ValueError("KNN features must have shape (rows, dimensions)")
+    if len(features) >= 1 << 32:
+        raise ValueError("C08 tie ordering supports fewer than 2^32 feature rows")
+
+    chosen = np.arange(len(features), dtype=np.intp) if selected_indices is None else np.asarray(selected_indices, dtype=np.intp)
+    if chosen.ndim != 1 or np.any(chosen < 0) or np.any(chosen >= len(features)) or len(np.unique(chosen)) != len(chosen):
+        raise ValueError("selected_indices must be unique valid feature row indices")
     labels = np.asarray(labels)
-    if len(labels) != n_samples:
-        raise ValueError("Length mismatch between features and labels")
-    ids = np.asarray(row_ids if row_ids is not None else [f"row:{i}" for i in range(n_samples)], dtype=str)
-    if len(ids) != n_samples:
-        raise ValueError("row_ids length must match features and labels")
-    if n_samples < 2:
-        return {
-            "taxonomic_rank": taxonomic_rank, "available": False,
-            "unavailable_reason": "no_stratified_queries", "global_knn_accuracy": float("nan"),
-            "global_knn_top5_accuracy": float("nan"), "per_cluster_metrics": pd.DataFrame(),
-            "k_requested": k, "k": 0, "n_reference": n_samples, "n_query": 0,
-            "n_classes_total": len(np.unique(labels)), "n_classes_with_query": 0,
-            "n_classes_reference_only": len(np.unique(labels)), "reference_indices": np.arange(n_samples),
-            "query_indices": np.empty(0, dtype=np.intp), "reference_ids": ids,
-            "query_ids": np.empty(0, dtype=str), "identity_overlap_count": 0,
-            "zero_self_neighbor": True, "top5_definition": "true label appears among the requested nearest-neighbor labels",
-        }
+    if len(labels) != len(chosen):
+        raise ValueError("Length mismatch between selected features and labels")
+    ids = np.asarray(row_ids if row_ids is not None else [f"row:{i}" for i in range(len(features))], dtype=str)
+    if len(ids) != len(features):
+        raise ValueError("row_ids length must match feature rows")
 
+    n_samples = len(chosen)
     rng = np.random.default_rng(random_state)
-
-    # Stratified 80/20 train/test split (reference / query)
     unique_classes, counts = np.unique(labels, return_counts=True)
-    ref_indices: List[int] = []
-    query_indices: List[int] = []
-
-    for cls, cnt in zip(unique_classes, counts):
-        cls_idx = np.where(labels == cls)[0]
-        rng.shuffle(cls_idx)
-        n_query = max(1, int(round(cnt * test_size))) if cnt > 1 else 0
-        if n_query >= cnt:
-            n_query = cnt - 1
-
-        if n_query > 0:
-            query_indices.extend(cls_idx[:n_query])
-            ref_indices.extend(cls_idx[n_query:])
-        else:
-            ref_indices.extend(cls_idx)
-
-    ref_idx_arr = np.array(ref_indices, dtype=np.intp)
-    query_idx_arr = np.array(query_indices, dtype=np.intp)
-
-    # Verify disjoint partitions (zero self-neighbors)
-    overlap = set(ref_indices).intersection(set(query_indices))
-    if len(overlap) > 0:
+    sorted_positions = np.argsort(labels, kind="stable")
+    ref_local: List[int] = []
+    query_local: List[int] = []
+    offset = 0
+    for count in counts:
+        class_positions = sorted_positions[offset:offset + count].copy()
+        rng.shuffle(class_positions)
+        n_query = max(1, int(round(count * test_size))) if count > 1 else 0
+        n_query = min(n_query, count - 1)
+        query_local.extend(class_positions[:n_query])
+        ref_local.extend(class_positions[n_query:])
+        offset += count
+    ref_local_arr = np.asarray(ref_local, dtype=np.intp)
+    query_local_arr = np.asarray(query_local, dtype=np.intp)
+    ref_idx_arr = chosen[ref_local_arr]
+    query_idx_arr = chosen[query_local_arr]
+    selected_lookup = None
+    if selected_indices is not None:
+        selected_lookup = np.full(len(features), -1, dtype=np.intp)
+        selected_lookup[chosen] = np.arange(n_samples, dtype=np.intp)
+    if np.intersect1d(ref_idx_arr, query_idx_arr).size:
         raise RuntimeError("Reference and query index partitions must be strictly disjoint")
+    seen_ids = set()
+    for start in range(0, len(ref_idx_arr), 8192):
+        seen_ids.update(str(value) for value in ids[ref_idx_arr[start:start + 8192]])
+    for start in range(0, len(query_idx_arr), 8192):
+        for value in ids[query_idx_arr[start:start + 8192]]:
+            if str(value) in seen_ids:
+                raise ValueError(f"Operational row identities overlap between KNN reference and query: {value}")
 
-    identity_overlap = set(ids[ref_idx_arr]).intersection(ids[query_idx_arr])
-    if identity_overlap:
-        raise ValueError(f"Operational row identities overlap between KNN reference and query: {next(iter(identity_overlap))}")
-    if len(query_idx_arr) == 0 or len(ref_idx_arr) < k:
-        return {
-            "taxonomic_rank": taxonomic_rank, "available": False,
-            "global_knn_accuracy": float("nan"), "global_knn_top5_accuracy": float("nan"),
-            "per_cluster_metrics": pd.DataFrame(columns=["class_label", "test_samples", "knn_accuracy", "knn_top5_accuracy", "taxonomic_rank"]),
-            "unavailable_reason": "no_stratified_queries" if len(query_idx_arr) == 0 else "fewer_than_requested_neighbors",
-            "k_requested": k, "k": 0, "n_reference": len(ref_idx_arr), "n_query": len(query_idx_arr),
-            "n_classes_total": len(unique_classes), "n_classes_with_query": len(set(labels[query_idx_arr].tolist())),
-            "n_classes_reference_only": len(unique_classes) - len(set(labels[query_idx_arr].tolist())),
-            "reference_indices": ref_idx_arr, "query_indices": query_idx_arr,
-            "reference_ids": ids[ref_idx_arr], "query_ids": ids[query_idx_arr],
-            "identity_overlap_count": len(identity_overlap), "zero_self_neighbor": len(identity_overlap) == 0,
-            "top5_definition": "true label appears among the requested nearest-neighbor labels",
-        }
-
-    X_ref = torch.as_tensor(features[ref_idx_arr], dtype=torch.float32)
-    y_ref = torch.as_tensor(labels[ref_idx_arr], dtype=torch.long)
-    X_query = torch.as_tensor(features[query_idx_arr], dtype=torch.float32)
-    y_query = torch.as_tensor(labels[query_idx_arr], dtype=torch.long)
-
-    dev = torch.device(device)
-    X_ref = F.normalize(X_ref.to(dev), p=2, dim=1)
-    y_ref = y_ref.to(dev)
-
-    k_eff = k
-    preds_list: List[torch.Tensor] = []
-    top5_hits_list: List[torch.Tensor] = []
-    neighbor_indices_list: List[np.ndarray] = []
-
-    for i in range(0, len(X_query), batch_size):
-        batch_x = F.normalize(X_query[i : i + batch_size].to(dev), p=2, dim=1)
-        sim = torch.mm(batch_x, X_ref.T)
-
-        topk = torch.topk(sim, k=k_eff, dim=1, largest=True)
-        neighbor_indices_list.append(ref_idx_arr[topk.indices.cpu().numpy()])
-        topk_labels = y_ref[topk.indices]
-
-        # Majority vote with deterministic tie-breaking (mode)
-        mode_preds, _ = torch.mode(topk_labels, dim=1)
-        preds_list.append(mode_preds.cpu())
-
-        # Top-5 hit check: is true query label in top-k nearest neighbors?
-        batch_y = y_query[i : i + batch_size].to(dev)
-        top5_hits = (topk_labels == batch_y.unsqueeze(1)).any(dim=1)
-        top5_hits_list.append(top5_hits.cpu())
-
-    y_pred = torch.cat(preds_list).numpy()
-    y_true = y_query.numpy()
-    top5_correct = torch.cat(top5_hits_list).numpy() if top5_hits_list else np.empty((0,), dtype=bool)
-    neighbor_indices = np.concatenate(neighbor_indices_list, axis=0)
-    self_neighbor_count = int(sum(q in row for q, row in zip(query_idx_arr, neighbor_indices)))
-    if self_neighbor_count:
-        raise RuntimeError("A query identity appeared among its own KNN reference neighbors")
-
-    correct = (y_pred == y_true)
-    global_acc = float(np.mean(correct)) if len(correct) > 0 else 0.0
-    global_top5_acc = float(np.mean(top5_correct)) if len(top5_correct) > 0 else 0.0
-
-    # Per-cluster accuracy table
-    df_cluster = pd.DataFrame({
-        "y_true": y_true,
-        "y_pred": y_pred,
-        "correct": correct,
-        "top5_correct": top5_correct,
-    })
-    cluster_summary = (
-        df_cluster.groupby("y_true")
-        .agg(
-            test_samples=("correct", "count"),
-            knn_accuracy=("correct", "mean"),
-            knn_top5_accuracy=("top5_correct", "mean"),
-        )
-        .reset_index()
-        .rename(columns={"y_true": "class_label"})
-    )
-    cluster_summary["taxonomic_rank"] = taxonomic_rank
-
-    return {
+    n_query_classes = len(np.unique(labels[query_local_arr]))
+    common = {
         "taxonomic_rank": taxonomic_rank,
-        "global_knn_accuracy": global_acc,
-        "global_knn_top5_accuracy": global_top5_acc,
-        "k": k_eff,
-        "n_reference": len(X_ref),
-        "n_query": len(X_query),
-        "zero_self_neighbor": self_neighbor_count == 0 and len(identity_overlap) == 0,
-        "available": True,
         "k_requested": k,
+        "n_reference": len(ref_idx_arr),
+        "n_query": len(query_idx_arr),
         "n_classes_total": len(unique_classes),
-        "n_classes_with_query": len(np.unique(y_true)),
-        "n_classes_reference_only": len(unique_classes) - len(np.unique(y_true)),
+        "n_classes_with_query": n_query_classes,
+        "n_classes_reference_only": len(unique_classes) - n_query_classes,
         "reference_indices": ref_idx_arr,
         "query_indices": query_idx_arr,
-        "reference_ids": ids[ref_idx_arr],
-        "query_ids": ids[query_idx_arr],
-        "neighbor_indices": neighbor_indices,
-        "neighbor_ids": ids[neighbor_indices],
-        "self_neighbor_count": self_neighbor_count,
-        "identity_overlap_count": len(identity_overlap),
-        "reference_fraction": len(ref_idx_arr) / n_samples,
-        "query_fraction": len(query_idx_arr) / n_samples,
+        "identity_overlap_count": 0,
+        "zero_self_neighbor": True,
         "top5_definition": "true label appears among the requested nearest-neighbor labels",
-        "y_true": y_true,
-        "y_pred": y_pred,
-        "per_cluster_metrics": cluster_summary,
+        "protocol": "c08_tiled_cosine_v1",
+        "device": str(torch.device(device)),
+        "workspace_mb": workspace_mb,
     }
+    ref_hash = _hash_ordered_ids(ids, ref_idx_arr)
+    query_hash = _hash_ordered_ids(ids, query_idx_arr)
+    unavailable = len(query_idx_arr) == 0 or len(ref_idx_arr) < k
+    if unavailable:
+        result = dict(common, available=False, k=0, global_knn_accuracy=float("nan"),
+                      global_knn_top5_accuracy=float("nan"),
+                      per_cluster_metrics=pd.DataFrame(columns=["class_label", "test_samples", "knn_accuracy", "knn_top5_accuracy", "taxonomic_rank"]),
+                      unavailable_reason="no_stratified_queries" if len(query_idx_arr) == 0 else "fewer_than_requested_neighbors",
+                      self_neighbor_count=0)
+        if not compact:
+            result.update(reference_ids=ids[ref_idx_arr], query_ids=ids[query_idx_arr])
+        result["audit_summary"] = {
+            "model": None, "rank": taxonomic_rank, "available": False,
+            "protocol": "c08_tiled_cosine_v1", "embedding_artifact_sha256": embedding_artifact_sha256,
+            "n_reference": len(ref_idx_arr), "n_query": len(query_idx_arr), "k_requested": k,
+            "reference_ids_sha256": ref_hash, "query_ids_sha256": query_hash,
+            "neighbor_ids_sha256": hashlib.sha256().hexdigest(), "self_neighbor_count": 0,
+            "neighbor_parquet_path": None, "neighbor_parquet_sha256": None,
+            "device": str(torch.device(device)), "workspace_mb": workspace_mb,
+            "query_batch_size_effective": 0, "reference_batch_size_effective": 0,
+        }
+        return result
+
+    dimension = int(features.shape[1])
+    requested_bytes = workspace_mb * 1024 * 1024
+    minimum_bytes = _knn_workspace_bytes(1, k, dimension, k)
+    if requested_bytes < minimum_bytes:
+        raise RuntimeError(f"KNN workspace requested {requested_bytes} bytes; minimum {minimum_bytes} bytes for one query and {k} references")
+    query_rows = min(query_batch_size, len(query_idx_arr))
+    while query_rows > 1 and _knn_workspace_bytes(query_rows, k, dimension, k) > requested_bytes:
+        query_rows = max(1, query_rows // 2)
+    ref_rows = (requested_bytes - 12 * dimension * query_rows - 64 * query_rows * k) // (12 * dimension + 64 * query_rows)
+    ref_rows = max(1, min(int(ref_rows), len(ref_idx_arr)))
+    if reference_batch_size is not None:
+        ref_rows = min(ref_rows, reference_batch_size)
+    peak_estimate = _knn_workspace_bytes(query_rows, ref_rows, dimension, k)
+    if peak_estimate > requested_bytes:
+        raise RuntimeError(f"KNN workspace requested {requested_bytes} bytes; minimum {minimum_bytes} bytes")
+
+    dev = torch.device(device)
+    y_true = np.asarray(labels[query_local_arr], dtype=np.int64)
+    y_pred = np.empty(len(query_idx_arr), dtype=np.int64)
+    top5_correct = np.empty(len(query_idx_arr), dtype=bool)
+    neighbor_indices = np.empty((len(query_idx_arr), k), dtype=np.intp) if not compact else None
+    neighbor_hash = hashlib.sha256()
+    self_neighbor_count = 0
+    audit_path = Path(audit_output_path) if audit_output_path is not None else None
+    temporary = None
+    writer = None
+    if audit_path is not None:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        if audit_path.exists():
+            raise FileExistsError(f"Refusing to overwrite KNN neighbor audit: {audit_path}")
+        with tempfile.NamedTemporaryFile(dir=audit_path.parent, suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+        schema = pa.schema([("query_index", pa.int64()), ("neighbor_indices", pa.list_(pa.int64(), list_size=k))])
+    try:
+        if temporary is not None:
+            writer = pq.ParquetWriter(temporary, schema=schema)
+        for start in range(0, len(query_idx_arr), query_rows):
+            stop = min(start + query_rows, len(query_idx_arr))
+            batch_q = query_idx_arr[start:stop]
+            query_tensor = F.normalize(torch.as_tensor(np.asarray(features[batch_q]), dtype=torch.float32, device=dev), p=2, dim=1)
+            best_keys = None
+            for ref_start in range(0, len(ref_idx_arr), ref_rows):
+                batch_r = ref_idx_arr[ref_start:ref_start + ref_rows]
+                ref_tensor = F.normalize(torch.as_tensor(np.asarray(features[batch_r]), dtype=torch.float32, device=dev), p=2, dim=1)
+                similarity = torch.mm(query_tensor, ref_tensor.T)
+                reference_indices = torch.as_tensor(batch_r, dtype=torch.int64, device=dev)
+                keys = _knn_ordered_keys(similarity, reference_indices)
+                tile_keys = torch.topk(keys, k=min(k, len(batch_r)), dim=1).values
+                candidates = tile_keys if best_keys is None else torch.cat((best_keys, tile_keys), dim=1)
+                best_keys = torch.topk(candidates, k=min(k, candidates.shape[1]), dim=1).values
+                del ref_tensor, similarity, reference_indices, keys, tile_keys, candidates
+            batch_neighbors = (0xFFFFFFFF - (best_keys & 0xFFFFFFFF)).to("cpu").numpy().astype(np.intp, copy=False)
+            self_neighbor_count += int(np.any(batch_neighbors == batch_q[:, None], axis=1).sum())
+            neighbor_hash.update(np.asarray(ids[batch_neighbors]).tobytes())
+            neighbor_local = selected_lookup[batch_neighbors] if selected_lookup is not None else batch_neighbors
+            neighbor_labels = np.asarray(labels[neighbor_local], dtype=np.int64)
+            votes = (neighbor_labels[:, :, None] == neighbor_labels[:, None, :]).sum(axis=2)
+            winning = votes == votes.max(axis=1, keepdims=True)
+            y_pred[start:stop] = np.where(winning, neighbor_labels, np.iinfo(np.int64).max).min(axis=1)
+            top5_correct[start:stop] = (neighbor_labels == y_true[start:stop, None]).any(axis=1)
+            if neighbor_indices is not None:
+                neighbor_indices[start:stop] = batch_neighbors
+            if writer is not None:
+                flat = pa.array(batch_neighbors.astype(np.int64, copy=False).reshape(-1), type=pa.int64())
+                table = pa.Table.from_arrays([
+                    pa.array(batch_q.astype(np.int64, copy=False), type=pa.int64()),
+                    pa.FixedSizeListArray.from_arrays(flat, list_size=k),
+                ], schema=schema)
+                writer.write_table(table, row_group_size=query_rows)
+        if writer is not None:
+            writer.close()
+            writer = None
+            os.replace(temporary, audit_path)
+    finally:
+        if writer is not None:
+            writer.close()
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    if self_neighbor_count:
+        if audit_path is not None:
+            audit_path.unlink(missing_ok=True)
+        raise RuntimeError("A query identity appeared among its own KNN reference neighbors")
+
+    correct = y_pred == y_true
+    cluster_summary = (pd.DataFrame({"y_true": y_true, "correct": correct, "top5_correct": top5_correct})
+                       .groupby("y_true")
+                       .agg(test_samples=("correct", "count"), knn_accuracy=("correct", "mean"),
+                            knn_top5_accuracy=("top5_correct", "mean"))
+                       .reset_index().rename(columns={"y_true": "class_label"}))
+    cluster_summary["taxonomic_rank"] = taxonomic_rank
+    audit_summary = {
+        "rank": taxonomic_rank, "available": True, "protocol": "c08_tiled_cosine_v1",
+        "embedding_artifact_sha256": embedding_artifact_sha256,
+        "n_reference": len(ref_idx_arr), "n_query": len(query_idx_arr), "k_requested": k,
+        "reference_ids_sha256": ref_hash, "query_ids_sha256": query_hash,
+        "neighbor_ids_sha256": neighbor_hash.hexdigest(), "self_neighbor_count": 0,
+        "identity_overlap_count": 0, "neighbor_parquet_path": str(audit_path.resolve()) if audit_path else None,
+        "neighbor_parquet_sha256": _sha256_file(audit_path) if audit_path else None,
+        "device": str(dev), "workspace_mb": workspace_mb,
+        "query_batch_size_effective": query_rows, "reference_batch_size_effective": ref_rows,
+    }
+    result = dict(common, available=True, k=k, global_knn_accuracy=float(np.mean(correct)),
+                  global_knn_top5_accuracy=float(np.mean(top5_correct)),
+                  per_cluster_metrics=cluster_summary, self_neighbor_count=0,
+                  reference_fraction=len(ref_idx_arr) / n_samples,
+                  query_fraction=len(query_idx_arr) / n_samples, y_true=y_true, y_pred=y_pred,
+                  query_batch_size_effective=query_rows, reference_batch_size_effective=ref_rows,
+                  workspace_peak_estimated_bytes=peak_estimate, audit_summary=audit_summary)
+    if not compact:
+        result.update(reference_ids=ids[ref_idx_arr], query_ids=ids[query_idx_arr],
+                      neighbor_indices=neighbor_indices, neighbor_ids=ids[neighbor_indices])
+    if audit_path is not None:
+        log_artifact_path("KNN neighbor audit", audit_path)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -870,14 +977,23 @@ def evaluate_silhouette_with_audit(
     sampling_strategy: str = "random",
     random_state: int = 42,
     taxonomic_rank: str = "Species",
+    selected_indices: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     Computes Cosine Silhouette Score in the original high-dimensional feature space,
     auditing class retention and dropping singletons (<2 samples).
     """
-    features = np.asarray(features, dtype=np.float32)
+    if selected_indices is None:
+        features = np.asarray(features, dtype=np.float32)
+        selected = None
+    else:
+        selected = np.asarray(selected_indices, dtype=np.intp)
+        if selected.ndim != 1 or np.any(selected < 0) or np.any(selected >= len(features)):
+            raise ValueError("Silhouette selected_indices must be valid feature row indices")
     labels = np.asarray(labels)
-    N = len(features)
+    N = len(features) if selected is None else len(selected)
+    if len(labels) != N:
+        raise ValueError("Silhouette feature selection and label counts differ")
     rng = np.random.default_rng(random_state)
 
     if N <= max_samples:
@@ -900,7 +1016,8 @@ def evaluate_silhouette_with_audit(
         # Uniform random subsampling
         sample_indices = rng.choice(N, size=max_samples, replace=False)
 
-    sub_features = features[sample_indices]
+    selected_sample = sample_indices if selected is None else selected[sample_indices]
+    sub_features = np.asarray(features[selected_sample], dtype=np.float32)
     sub_labels = labels[sample_indices]
 
     # Audit classes

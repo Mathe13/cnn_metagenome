@@ -298,6 +298,8 @@ python3 scripts/run_motif_analysis.py \
 
 Extract pre-classifier representations, evaluate metric clustering with Cosine KNN ($k=5$, 80/20 train/test reference split) and Silhouette scores, and project via UMAP:
 
+In reproduction notebook `short/06_ictv_latent_space_and_hierarchy.ipynb`, `LATENT_KNN_WORKSPACE_MB` (default 1024 MiB) limits the explicit KNN calculation blocks and `LATENT_KNN_QUERY_BATCH_SIZE` (default 256) limits query rows per block. KNN uses the notebook device (CUDA on an available remote GPU, CPU in local smoke tests). The exact 5-NN result uses protocol `c08_tiled_cosine_v1`; equal similarities are ordered by the smallest original reference row index. Each run writes `knn_identity_audit.json` (`c08_knn_audit_v1`) and one neighbor-index Parquet per available model/rank. The audit records ordered ID hashes, counts, effective block sizes, protocol, device, and the test embedding artifact hash; the Parquets reconstruct neighbors through original row indices. Silhouette and UMAP retain their separate 5,000-row and 100-row sample limits. The workspace estimate excludes persistent embeddings, IDs, framework overhead, and CUDA caches, so it is not a process RSS or VRAM ceiling.
+
 ```bash
 python3 scripts/run_latent_evaluation.py \
   --model-variant resnet_clean_species \
