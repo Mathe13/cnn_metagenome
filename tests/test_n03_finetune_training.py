@@ -310,11 +310,14 @@ class TestN03FinetuneTraining(unittest.TestCase):
 
     def test_c11_notebook_03_artifacts_generated(self):
         """C11: 03_finetune_resnet50_species.ipynb generates metrics and manifest."""
-        out_dir = Path("results_reproduction/n03_finetune/resnet50")
+        candidates = list(Path("results_reproduction/runs").glob("c05-*/resnet50_finetune_species/outputs"))
+        self.assertTrue(candidates, "Expected a uniquely reserved C05 ResNet run namespace")
+        out_dir = max(candidates, key=lambda path: path.stat().st_mtime)
         expected_files = [
             "training_history.csv",
             "training_history.json",
             "manifest.json",
+            "c05_manifest.json",
         ]
         for fname in expected_files:
             fpath = out_dir / fname
@@ -356,11 +359,14 @@ class TestN03FinetuneTraining(unittest.TestCase):
 
     def test_c14_notebook_04_artifacts_generated(self):
         """C14: 04_finetune_convnext_species.ipynb generates metrics and manifest."""
-        out_dir = Path("results_reproduction/n03_finetune/convnext")
+        candidates = list(Path("results_reproduction/runs").glob("c05-*/convnext_finetune_species/outputs"))
+        self.assertTrue(candidates, "Expected a uniquely reserved C05 ConvNeXt run namespace")
+        out_dir = max(candidates, key=lambda path: path.stat().st_mtime)
         expected_files = [
             "training_history.csv",
             "training_history.json",
             "manifest.json",
+            "c05_manifest.json",
         ]
         for fname in expected_files:
             fpath = out_dir / fname

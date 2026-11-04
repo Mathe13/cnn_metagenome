@@ -263,7 +263,7 @@ class ParquetBatchIterableDataset(IterableDataset):
             return
 
         try:
-            partition_id = self._partition_ids[file_path]
+            partition_id = self._partition_ids.get(file_path) if self.include_identity else None
             row_ordinal = 0
             for record_batch in pf.iter_batches(batch_size=self.batch_size, columns=cols_to_load):
                 inputs_list = record_batch.column(seq_col).to_pylist()
@@ -302,7 +302,7 @@ class ParquetBatchIterableDataset(IterableDataset):
         seq_col = self._resolve_sequence_column(partition_df.columns)
         has_label = self.label_column in partition_df.columns
         num_rows = len(partition_df)
-        partition_id = self._partition_ids[file_path] if self.include_identity else ""
+        partition_id = self._partition_ids.get(file_path) if self.include_identity else None
 
         for i in range(0, num_rows, self.batch_size):
             end_index = min(i + self.batch_size, num_rows)

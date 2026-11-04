@@ -5,6 +5,9 @@ Unified training loop and evaluation for controlled architecture experiments.
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional, Sequence
 import math
+import os
+import random
+import tempfile
 import numpy as np
 import torch
 import torch.nn as nn
@@ -33,6 +36,9 @@ class ControlledTrainer:
         self.config = config
         self.device = device
         self.current_step = 0
+        self.steps_attempted = 0
+        self.steps_effective = 0
+        self.training_history: list[dict[str, Any]] = []
 
         # Layer freezing policy
         if freeze_layers is not None:
@@ -188,6 +194,7 @@ class ControlledTrainer:
         running_loss_t = torch.zeros((), dtype=torch.float64, device=self.device)
         total_samples = 0
         correct_top1_t = torch.zeros((), dtype=torch.int64, device=self.device)
+        correct_top5_t = torch.zeros((), dtype=torch.int64, device=self.device)
 
         num_c = int(self.config.num_classes)
         support_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
@@ -195,6 +202,8 @@ class ControlledTrainer:
         tp_counts_t = torch.zeros(num_c, dtype=torch.int64, device=self.device)
 
         batch_count = 0
+        epoch_attempted = 0
+        epoch_effective = 0
         non_blocking = self.device.type == "cuda"
         autocast_device = "cuda" if self.device.type == "cuda" and torch.cuda.is_available() else "cpu"
         gen_on_cpu = generator is not None and generator.device.type != self.device.type
@@ -229,6 +238,7 @@ class ControlledTrainer:
                 loss = self.criterion(logits, batch_y)
 
             optimizer_stepped = False
+            epoch_attempted += 1
             if self.scaler.is_enabled():
                 self.scaler.scale(loss).backward()
                 if self.config.grad_clip_norm is not None:
@@ -251,6 +261,7 @@ class ControlledTrainer:
                 optimizer_stepped = True
 
             if optimizer_stepped:
+                epoch_effective += 1
                 has_stepped_optimizer = True
                 if scheduler is not None and step_unit == "batch":
                     scheduler.step()
@@ -261,6 +272,8 @@ class ControlledTrainer:
 
                 preds = torch.argmax(logits.detach(), dim=1)
                 correct_top1_t += (preds == batch_y).sum()
+                top_indices = torch.topk(logits.detach(), min(5, logits.size(1)), dim=1).indices
+                correct_top5_t += (top_indices == batch_y.unsqueeze(1)).any(dim=1).sum()
 
                 y_true_b = batch_y.long()
                 y_pred_b = preds.long()
@@ -281,14 +294,18 @@ class ControlledTrainer:
             return {
                 "train_loss": 0.0,
                 "train_acc": 0.0,
+                "train_acc_top5": 0.0,
                 "train_f1": 0.0,
                 "train_f1_weighted": 0.0,
                 "total_samples": 0,
                 "learning_rate": epoch_lr,
+                "steps_attempted": epoch_attempted,
+                "steps_effective": epoch_effective,
             }
 
         running_loss = float(running_loss_t.item())
         correct_top1 = int(correct_top1_t.item())
+        correct_top5 = int(correct_top5_t.item())
         support_counts = support_counts_t.cpu().numpy()
         pred_counts = pred_counts_t.cpu().numpy()
         tp_counts = tp_counts_t.cpu().numpy()
@@ -301,13 +318,18 @@ class ControlledTrainer:
         total_sup = int(np.sum(support_counts))
         weighted_f1 = float(np.sum(per_class_f1 * support_counts) / total_sup) if total_sup > 0 else 0.0
 
+        self.steps_attempted += epoch_attempted
+        self.steps_effective += epoch_effective
         return {
             "train_loss": float(running_loss / total_samples),
             "train_acc": float(correct_top1 / total_samples),
+            "train_acc_top5": float(correct_top5 / total_samples),
             "train_f1": float(macro_f1),
             "train_f1_weighted": float(weighted_f1),
             "total_samples": total_samples,
             "learning_rate": epoch_lr,
+            "steps_attempted": epoch_attempted,
+            "steps_effective": epoch_effective,
         }
 
     def evaluate_epoch(
@@ -478,6 +500,9 @@ class ControlledTrainer:
         save_path: Path | str,
         scheduler: Optional[Any] = None,
         training_history: Optional[list[dict[str, Any]]] = None,
+        run_identity: Optional[dict[str, Any]] = None,
+        noise_generator: Optional[torch.Generator] = None,
+        checkpoint_role: Optional[Literal["last", "best"]] = None,
     ) -> Path:
         """
         Serializes full training state dictionary compatible with historical resume keys.
@@ -494,14 +519,37 @@ class ControlledTrainer:
             scaler_state = self.scaler.state_dict()
 
         target_model = getattr(self.model, "_orig_mod", self.model)
+        np_state = np.random.get_state()
+        rng_state: dict[str, Any] = {
+            "python": random.getstate(),
+            "numpy": {
+                "bit_generator": np_state[0],
+                "state": np_state[1].tolist(),
+                "position": int(np_state[2]),
+                "has_gauss": int(np_state[3]),
+                "cached_gaussian": float(np_state[4]),
+            },
+            "torch_cpu": torch.get_rng_state(),
+            "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+            "noise_generator": noise_generator.get_state() if noise_generator is not None else None,
+        }
+        history = list(training_history) if training_history is not None else list(self.training_history)
         payload = {
+            "checkpoint_schema": "c05_finetune_checkpoint_v1",
+            "checkpoint_role": checkpoint_role,
             "epoch": epoch,
+            "current_step": self.current_step,
+            "steps_attempted": self.steps_attempted,
+            "steps_effective": self.steps_effective,
             "model_state_dict": target_model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": sched_state,
             "scaler_state_dict": scaler_state,
             "metrics": metrics,
-            "training_history": list(training_history) if training_history is not None else [],
+            "training_history": history,
+            "best_metric_value": self.best_metric_value,
+            "rng_state": rng_state,
+            "run_identity": dict(run_identity or {}),
             "config": {
                 "num_classes": self.config.num_classes,
                 "noise_rate": self.config.noise_rate,
@@ -510,15 +558,32 @@ class ControlledTrainer:
                 "dropout_rate": self.config.dropout_rate,
                 "label_smoothing": self.config.label_smoothing,
                 "freeze_layers": list(self.freeze_layers),
+                "mode": self.config.mode,
+                "scheduler_step_unit": self.config.scheduler_step_unit,
+                "checkpoint_metric": self.config.checkpoint_metric,
+                "max_steps": self.config.max_steps,
+                "batch_size": self.config.batch_size,
+                "amp": self.config.amp,
             },
         }
-        torch.save(payload, path)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+                temporary_path = Path(handle.name)
+            torch.save(payload, temporary_path)
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
         return path
 
     def load_resume_checkpoint(
         self,
         resume_path: Path | str,
         scheduler: Optional[Any] = None,
+        expected_identity: Optional[dict[str, Any]] = None,
+        noise_generator: Optional[torch.Generator] = None,
+        require_complete_state: bool = False,
     ) -> tuple[int, list[dict[str, Any]]]:
         """
         Restores model weights, optimizer, scheduler, and scaler from checkpoint file.
@@ -528,9 +593,37 @@ class ControlledTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found at '{path}'")
 
-        checkpoint = torch.load(path, map_location="cpu")
+        if not path.is_file():
+            raise FileNotFoundError(f"Checkpoint not found at '{path}'")
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         if not isinstance(checkpoint, dict):
             raise ValueError(f"Invalid checkpoint format in '{path}': expected dict, got {type(checkpoint)}")
+
+        if expected_identity is not None:
+            if checkpoint.get("checkpoint_schema") != "c05_finetune_checkpoint_v1":
+                raise ValueError("Exact C05 resume requires checkpoint_schema='c05_finetune_checkpoint_v1'")
+            if checkpoint.get("run_identity") != expected_identity:
+                raise ValueError("C05 resume identity mismatch (variant, classes, data or configuration)")
+        required_keys = ("model_state_dict", "optimizer_state_dict", "scheduler_state_dict", "scaler_state_dict", "rng_state", "training_history")
+        if require_complete_state:
+            missing = [key for key in required_keys if key not in checkpoint]
+            if missing:
+                raise ValueError(f"C05 exact resume missing required state: {', '.join(missing)}")
+            if checkpoint.get("checkpoint_role") not in {"last", "best"}:
+                raise ValueError("C05 exact resume requires an explicit checkpoint_role of 'last' or 'best'")
+            if scheduler is None:
+                raise ValueError("C05 exact resume requires the configured scheduler")
+            history = checkpoint.get("training_history")
+            saved_epoch = int(checkpoint.get("epoch", 0))
+            if not history or int(history[-1].get("epoch", -1)) != saved_epoch:
+                raise ValueError("C05 exact resume requires history ending at the checkpoint epoch")
+            rng_state = checkpoint.get("rng_state", {})
+            required_rng = {"python", "numpy", "torch_cpu", "torch_cuda", "noise_generator"}
+            missing_rng = sorted(required_rng - set(rng_state))
+            if missing_rng:
+                raise ValueError(f"C05 exact resume missing RNG state: {', '.join(missing_rng)}")
+            if noise_generator is not None and rng_state.get("noise_generator") is None:
+                raise ValueError("C05 exact resume missing noise-generator RNG state")
 
         # Clean potential _orig_mod. prefix from torch.compile and load into underlying module
         raw_state = checkpoint.get("model_state_dict", checkpoint)
@@ -542,25 +635,55 @@ class ControlledTrainer:
         target_model.load_state_dict(cleaned_state)
 
         if "optimizer_state_dict" in checkpoint and self.optimizer is not None:
-            try:
+            if require_complete_state:
                 self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            except Exception:
-                pass
+            else:
+                try:
+                    self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                except Exception:
+                    pass
 
         if "scheduler_state_dict" in checkpoint and scheduler is not None and hasattr(scheduler, "load_state_dict"):
-            try:
+            if require_complete_state:
                 scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            except Exception:
-                pass
+            else:
+                try:
+                    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                except Exception:
+                    pass
 
         if "scaler_state_dict" in checkpoint and self.scaler is not None and hasattr(self.scaler, "load_state_dict"):
-            try:
+            if require_complete_state:
                 self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
-            except Exception:
-                pass
+            else:
+                try:
+                    self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
+                except Exception:
+                    pass
+
+        if "rng_state" in checkpoint:
+            rng_state = checkpoint["rng_state"]
+            random.setstate(rng_state["python"])
+            np_state = rng_state["numpy"]
+            np.random.set_state((
+                np_state["bit_generator"], np.asarray(np_state["state"], dtype=np.uint32),
+                int(np_state["position"]), int(np_state["has_gauss"]), float(np_state["cached_gaussian"]),
+            ))
+            torch.set_rng_state(rng_state["torch_cpu"])
+            if torch.cuda.is_available() and rng_state.get("torch_cuda"):
+                torch.cuda.set_rng_state_all(rng_state["torch_cuda"])
+            if noise_generator is not None and rng_state.get("noise_generator") is not None:
+                noise_generator.set_state(rng_state["noise_generator"])
+        elif require_complete_state:
+            raise ValueError("C05 exact resume missing RNG state")
 
         saved_epoch = int(checkpoint.get("epoch", 0))
         history = list(checkpoint.get("training_history", []))
+        self.current_step = int(checkpoint.get("current_step", 0))
+        self.steps_attempted = int(checkpoint.get("steps_attempted", 0))
+        self.steps_effective = int(checkpoint.get("steps_effective", 0))
+        self.best_metric_value = checkpoint.get("best_metric_value")
+        self.training_history = history
         return saved_epoch + 1, history
 
     def resume_checkpoint(

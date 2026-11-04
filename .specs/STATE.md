@@ -26,13 +26,14 @@
 | AD-020 | Limite de evidência da inferência long-sequence: comparação empírica só com cinco variantes, mesmo conjunto identificado e mapeamento Species verificável; identidade genômica sem accession é `unknown`; diagnósticos não estabelecem causa. Preserva 512/256, mean logits, vote e pad/skip. | Supersede a interpretação causal/de genoma visto do AD-010 sem apagar seu registro; smoke fixtures não sustentam achados empíricos, e outputs C02 exigem namespaces/manifests identificados. | active | 2026-11-03 |
 | AD-021 | Baseline short pareado C03 exige queries materializadas comuns por taxa, ruído uniforme com reposição incluindo a base original, overlap forward/RC e manifesto COMPLETE por método-condição; smoke e históricos com substituição obrigatória não são evidência C03. | Identidade de IDs isolada não comprova igualdade de sequência, ordem de classes, referência ou execução concluída; saída sem accession mantém identidade genômica `unknown`. | active | 2026-11-03 |
 | AD-022 | C04 estima ICs por bootstrap estratificado de fragmentos com suporte fixo por táxon; Macro-F1 inclui todas as classes declaradas. Temperatura limpa é ajustada na validação identificada, selada antes do teste, e bins/figuras comparativas preservam suporte antes/depois. | Incerteza é condicional à população observada e não mede variabilidade de treino ou genomas independentes; smoke não pode ser admitido como evidência empírica. | active | 2026-11-03 |
+| AD-023 | C05 usa o protocolo `c05_finetune_audit_v1` com linhagem/hash/ordem de classes, papéis last/best/selected e resume apenas por escolha explícita com identidade e estados completos; a comparação scratch pareada `c05_controlled_scratch_v1` permanece `NOT_RUN` sem ativação e orçamento completo de seis execuções. | Preserva adaptações históricas e impede promoção de smoke, checkpoint por nome ou piloto de 200 passos a evidência empírica ou causal. | active | 2026-11-03 |
 
 ## Handoff
 
-**Feature**: c04-incerteza-calibracao-e-figuras
-**Where**: bootstrap compacto por fragmento, scaler selável com proveniência, bins comparativos e integração C04 nos notebooks 01/02.
-**In progress**: executar contratos locais e revisar a estrutura notebook; execução JupyterHub empírica ainda pendente.
-**Next step**: executar notebooks 01/02 remotamente com datasets Species/Genus e checkpoints identificados; reconciliar as 35 condições benchmark e 25 painéis calibrados.
-**Blockers**: `/home/mlima/workspace` e checkpoints Species não estavam disponíveis localmente; nenhum resultado real foi produzido ou reproduzido.
-**Uncommitted**: alterações locais preexistentes C02/C03 preservadas e não atribuídas a C04; o sandbox apresenta `.git` como somente leitura.
+**Feature**: c05-finetune-e-comparacao-controlada
+**Where**: fine-tuning mínimo C05 com entradas identificadas, namespaces exclusivos, checkpoints atômicos/retomáveis e avaliação pós-seleção; comparação pareada S4 não ativada.
+**In progress**: contratos sintéticos locais e revisão independente pendentes; execução empírica C05 ainda não realizada.
+**Next step**: concluir verificações e, quando cluster/checkpoints estiverem disponíveis, executar notebooks 03/04 com manifestos C05; S4 requer ativação e orçamento completo explícitos.
+**Blockers**: `/home/mlima/workspace` e checkpoints Species canônicos não estão disponíveis localmente; nenhum resultado real foi produzido/reproduzido; `.git` é somente leitura no sandbox.
+**Uncommitted**: alterações e saídas locais preexistentes C02/C03/C04 preservadas; arquivos gerados por smoke permanecem identificados como sintéticos e não são evidência empírica.
 **Branch**: main
