@@ -92,7 +92,7 @@ class JupyterHubDataTopology:
                 "genus_csv": str(self.root / "dataset_kraken" / "genus_name_ids.csv"),
                 "kraken_blast_dir": str(self.root / "cnn_kraken" / "benchmark_kraken_blast_20_per_species"),
                 "ictv_master": str(self.root / "short" / "ICTV_Master_Species_List_2025_MSL41.v1.xlsx"),
-                "hybrid_taxonomy_parquet": str(self.root / "short" / "main_taxonomy_hybrid_CLEANSED.parquet"),
+                "hybrid_taxonomy_parquet": str(self.resolve_short_taxonomy_path()),
             },
             "long": {
                 "ncbi_parquet_dir": str(
@@ -127,6 +127,40 @@ class JupyterHubDataTopology:
             resolved = self.resolve_checkpoint_path(name)
             p["checkpoints"][name] = str(resolved if resolved is not None else self.root / spec.checkpoint_rel_path)
         return p
+
+    def resolve_short_taxonomy_path(self) -> Path:
+        """Find the ICTV mapping, preferring curated data over the original hybrid.
+
+        ``TAXONOMY_PATH`` can name a Parquet file or a directory containing it.
+        An unresolved path is returned for the notebook's explicit missing-input
+        error and for the metadata-only preflight.
+        """
+        filenames = (
+            "main_taxonomy_hybrid_CLEANSED.parquet",
+            "main_taxonomy_hybrid_ictv_ncbi.parquet",
+        )
+        configured = os.getenv("TAXONOMY_PATH")
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.is_dir():
+                return next(
+                    (path for name in filenames if (path := configured_path / name).is_file()),
+                    configured_path / filenames[0],
+                )
+            return configured_path
+
+        project_root = Path(__file__).resolve().parents[2]
+        directories = (
+            self.root / "cnn_kraken" / "data_taxonomy_parquet",
+            self.root / "short",
+            project_root / "results_reproduction" / "taxonomy",
+            project_root / "short",
+        )
+        return next(
+            (path for name in filenames for directory in directories
+             if (path := directory / name).is_file()),
+            self.root / "short" / filenames[0],
+        )
 
     def resolve_long_artifact_path(self, artifact_name: str) -> Optional[Path]:
         """
