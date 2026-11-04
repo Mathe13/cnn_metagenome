@@ -76,6 +76,10 @@ class TestC05Manifest(unittest.TestCase):
             root = Path(tmp)
             checkpoint = root / "base.pt"
             checkpoint.write_bytes(b"weights")
+            validation = root / "validation.parquet"
+            validation.write_bytes(b"validation")
+            test = root / "test.parquet"
+            test.write_bytes(b"test")
             taxonomy = root / "species.csv"
             taxonomy.write_text("species,id\nSpecies A,1\nSpecies B,2\n", encoding="utf-8")
             order_sha, class_count = taxonomy_order_sha256(taxonomy)
@@ -96,7 +100,13 @@ class TestC05Manifest(unittest.TestCase):
                 protocol=protocol,
                 status="COMPLETE",
                 is_smoke_test=False,
-                inputs={"train": [{"sha256": "trainhash"}]},
+                inputs={
+                    "train": [{"sha256": "trainhash"}],
+                    "validation": [{"sha256": sha256_file(validation)}],
+                    "test": [{"sha256": sha256_file(test)}],
+                    "taxonomy_mapping": [{"sha256": sha256_file(taxonomy)}],
+                    "base_checkpoint": [{"sha256": sha256_file(checkpoint)}],
+                },
                 outputs=[checkpoint],
                 completed_epochs=2,
                 planned_epochs=2,
@@ -113,7 +123,16 @@ class TestC05Manifest(unittest.TestCase):
             self.assertEqual(loaded["effective_dropout"], 0.5)
             self.assertEqual(loaded["dropout_source"], "model config")
             self.assertEqual(loaded["configuration"]["noise_rate"], 0.05)
-            self.assertEqual(loaded["inputs"]["train"][0]["sha256"], "trainhash")
+            self.assertEqual(
+                {key: value[0]["sha256"] for key, value in loaded["inputs"].items()},
+                {
+                    "train": "trainhash",
+                    "validation": sha256_file(validation),
+                    "test": sha256_file(test),
+                    "taxonomy_mapping": sha256_file(taxonomy),
+                    "base_checkpoint": sha256_file(checkpoint),
+                },
+            )
             self.assertEqual(loaded["selected_checkpoint"]["role"], "selected")
             self.assertEqual(loaded["selected_checkpoint"]["rule"], "last")
             self.assertEqual(loaded["selected_checkpoint"]["epoch"], 2)
