@@ -28,7 +28,10 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
+try:
+    import pyarrow.parquet as pq
+except ImportError:  # Lightweight inventory and run reservation do not need Parquet support.
+    pq = None
 import torch
 import yaml
 
@@ -316,6 +319,8 @@ def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_t
                 ok, detail = False, "no parquet files"
             else:
                 try:
+                    if pq is None:
+                        raise ImportError("pyarrow is required to inspect Parquet schema")
                     schema = pq.read_schema(files[0])
                     absent = sorted(set(spec.get("columns", [])) - set(schema.names))
                     if absent:
@@ -698,6 +703,8 @@ def read_parquet_sample(
         p = Path(fp)
         if not p.exists() or p.is_dir():
             continue
+        if pq is None:
+            raise ImportError("pyarrow is required to read Parquet samples")
         pf = pq.ParquetFile(p)
         schema_names = pf.schema_arrow.names
         valid_cols = None
@@ -745,6 +752,8 @@ def read_parquet_hash_sample(
     common_dir = Path(os.path.commonpath([str(Path(name).resolve().parent) for name in files])) if files else Path.cwd()
     for file_name in files:
         parquet_path = Path(file_name)
+        if pq is None:
+            raise ImportError("pyarrow is required to sample Parquet files")
         pf = pq.ParquetFile(parquet_path)
         available += int(pf.metadata.num_rows)
         present = set(pf.schema_arrow.names)

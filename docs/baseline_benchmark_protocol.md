@@ -64,7 +64,7 @@ Because the 13,683 species classes are defined as a closed set, mapping queries 
 
 ### 4.1 Short Fragments (512 bp)
 
-In the standard random fragment split (80/10/10), an audit via canonical sequence hashing (`sha256(seq.upper())`) reveals that:
+In the standard random fragment split (80/10/10), an audit via canonical sequence hashing (`sha256(min(seq.upper(), reverse_complement(seq.upper())))`) records forward/reverse-complement exact matches. It reports observed counts; the published split-level estimate is not copied into run outputs.
 - **~95.89% of test fragments** have identical 512 bp sequences present in the training database (`has_overlap = True`).
 - Only **~4.11% of test fragments** do not share an exact 512 bp sequence match (`no_exact_overlap`).
 
@@ -106,6 +106,43 @@ Direct comparison between methods is only valid when evaluated on the **exact sa
 ---
 
 ## 6. Execution Command and Reproduction
+
+### 6.1 C03 paired short benchmark preparation
+
+`c03_paired_v1` adds content-linked query materialization and strict per-method/per-noise manifests. The config `configs/baseline_c03.yaml` contains relative train/test paths and the 13,683 Species map. The default command is read-only and inventories inputs and all 35 required result conditions:
+
+```bash
+python3 scripts/prepare_baseline_benchmark.py --config configs/baseline_c03.yaml --mode inventory
+```
+
+Explicit export uses the full declared train and test partitions, selects at most 20 eligible test fragments per zero-based Species label by SHA-256 priority (seed 42), saves row/query identities and the clean overlap audit, then materializes one deterministic uniform A/C/G/T resample including the original base at each selected position for each nominal rate. The same generated query table and FASTA are the inputs recorded for all seven methods at that rate. Export creates an exclusive run under `results_reproduction/runs/<run_id>/`:
+
+```bash
+python3 scripts/prepare_baseline_benchmark.py --config configs/baseline_c03.yaml --mode export --run-id c03-export-001
+```
+
+The export also writes the exact train-fragment references and flat Kraken taxonomy. `historical_padding_to_N_v1` records the original tool representation (`rstrip("_").replace("_", "N")`); CNNs read the same materialized nucleotide realization from CSV, with padding/unknowns mapped to null tokens by the existing encoder. Build both search databases only after export:
+
+```bash
+python3 scripts/prepare_baseline_benchmark.py --config configs/baseline_c03.yaml \
+  --mode build-databases --prepared-dir results_reproduction/runs/c03-export-001/c03-baseline-preparation/prepared
+```
+
+Run each method-condition on the shared query manifest. The corresponding commands and paths are emitted by `--mode plan`; CNN inference uses the registered 13,683-class checkpoint and exports Top-1/Top-5:
+
+```bash
+python3 scripts/run_c03_tool_baseline.py --method Kraken2-flat --queries <prepared>/queries_noise_00.csv \
+  --fasta <prepared>/queries_noise_00.fasta --query-manifest <prepared>/query_manifest_noise_00.json \
+  --reference-manifest <prepared>/references/reference_manifest.json --database <prepared>/references/kraken_db \
+  --output-dir <prepared>/comparison_results
+python3 scripts/run_c03_cnn_inference.py --variant resnet_clean_species --queries <prepared>/queries_noise_00.csv \
+  --query-manifest <prepared>/query_manifest_noise_00.json --checkpoint <registered-checkpoint> \
+  --reference-manifest <prepared>/preparation_manifest.json --output-dir <prepared>/comparison_results
+```
+
+An explicit `--mode plan` records input availability and tool paths without building databases or running inference. Execution outputs are admissible only with `COMPLETE` method-condition manifests that point to the matching query manifest and verify their output hash, class-order digest, reference, tool version, command, and abstention policy. Smoke outputs cannot pass the empirical loader. The current inventory is not evidence that the remote cluster artifacts exist.
+
+The benchmark's principal noise protocol is uniform replacement including the original base (expected effective change rate `3ε/4`). Historical `NOISE_MODE="substitution"` changes every selected position; those results belong to a separate protocol and cannot be relabeled `c03_paired_v1`. Historical BLASTN `max_target_seqs=100` is a reference retrieval limit, separate from aggregation to at most five unique species candidates. `no_exact_overlap` means no exact forward/RC fragment in the declared training partition, not an unseen genome.
 
 To reproduce baseline evaluations on either short fragments or long contigs:
 

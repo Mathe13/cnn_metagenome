@@ -1,0 +1,24 @@
+baseline_protocol: c03_paired_v1
+data_root: .
+inputs:
+  train: cnn_kraken/processed_kraken_species_splited_parquet/train
+  test: cnn_kraken/processed_kraken_species_splited_parquet/test
+seed: 42
+per_species: 20
+class_order: dataset_kraken/species_name_ids.csv
+tool_sequence_policy: historical_padding_to_N_v1
+methods:
+  - resnet_clean_species
+  - resnet_noise_species
+  - convnext_zero_species
+  - convnext_transfer_species
+  - convnext_noise_species
+  - Kraken2-flat
+  - BLASTN
+tool_parameters:
+  kraken2_confidence: 0.0
+  blast_task: blastn
+  blast_evalue: 0.00001
+  blast_dust: yes
+  blast_max_target_seqs: 100
+  blast_max_hsps: 1

@@ -73,6 +73,7 @@ def parse_blast_output(
     source: Union[str, Path, Iterable[str]],
     valid_query_ids: Optional[Iterable[str]] = None,
     max_targets: int = 5,
+    num_classes: int = 13683,
 ) -> Dict[str, List[int]]:
     """Parse BLASTN tabular output into species candidate rankings.
 
@@ -120,6 +121,8 @@ def parse_blast_output(
             raise ValueError(f"Subject ID lacks '_label_{{int}}' suffix: {sid}")
 
         label = int(match.group(1))
+        if label < 0 or label >= num_classes:
+            raise ValueError(f"BLAST subject label outside 0..{num_classes - 1}: {sid}")
         bitscore = float(score_str)
         evalue = float(ev_str)
 

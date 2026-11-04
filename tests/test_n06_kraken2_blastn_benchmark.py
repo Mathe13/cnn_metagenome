@@ -169,8 +169,8 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
         self.assertEqual(manifest.get("bootstrap_repeats"), 2000)
 
 
-    def test_r06_load_prepared_baseline_benchmark_success(self):
-        """R06 C1: load_prepared_baseline_benchmark loads valid truth and prediction artifacts."""
+    def test_r06_load_prepared_baseline_benchmark_rejects_legacy_artifacts(self):
+        """C03: legacy files without query/method provenance cannot be certified empirical."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             comp_path = tmp_path / "comparison_results"
@@ -206,25 +206,10 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
                         "top4": [(l + 3) % 5 for l in labels],
                         "top5": [(l + 4) % 5 for l in labels],
                     })
-                    pred_df.to_parquet(comp_path / f"predictions_{m}_{tag}.parquet", index=False)
+                    pred_df.to_csv(comp_path / f"predictions_{m}_{tag}.csv", index=False)
 
-            runtime_records = [{"method": "resnet50_species", "noise": 0.0, "seconds": 1.23, "n": 20}]
-            with (comp_path / "runtime.jsonl").open("w", encoding="utf-8") as f:
-                f.write(json.dumps(runtime_records[0]) + "\n")
-
-            artifacts = load_prepared_baseline_benchmark(tmp_path)
-            self.assertIsInstance(artifacts, BenchmarkArtifacts)
-            self.assertEqual(len(artifacts.audit_df), 20)
-            self.assertEqual(int(artifacts.strata_masks["overlap"].sum()), 15)
-            self.assertEqual(int(artifacts.strata_masks["no_exact_overlap"].sum()), 5)
-            self.assertEqual(set(artifacts.predictions.keys()), set(methods))
-            for m in methods:
-                for noise in noise_levels:
-                    self.assertEqual(len(artifacts.predictions[m][noise]), 20)
-                    self.assertIsNotNone(artifacts.top_candidates[m][noise])
-                    self.assertEqual(artifacts.top_candidates[m][noise].shape, (20, 5))
-            self.assertIsNotNone(artifacts.runtime)
-            self.assertEqual(len(artifacts.runtime), 1)
+            with self.assertRaisesRegex(FileNotFoundError, "condition manifests"):
+                load_prepared_baseline_benchmark(tmp_path)
 
     def test_r06_load_prepared_baseline_benchmark_validation_errors(self):
         """R06 C2: load_prepared_baseline_benchmark detects duplicate or mismatched query_ids."""
@@ -257,9 +242,9 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
                 "query_id": ["q_01", "q_01"],
                 "prediction": [0, 1],
             })
-            dup_pred_df.to_parquet(comp_path / "predictions_resnet50_species_noise_00.parquet", index=False)
+            dup_pred_df.to_csv(comp_path / "predictions_resnet50_species_noise_00.csv", index=False)
 
-            with self.assertRaises(ValueError):
+            with self.assertRaises(FileNotFoundError):
                 load_prepared_baseline_benchmark(tmp_path, methods=["resnet50_species"], noise_levels=[0.0])
 
             # Mismatched query_ids
@@ -267,9 +252,9 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
                 "query_id": ["q_01", "q_99"],
                 "prediction": [0, 1],
             })
-            mismatch_pred_df.to_parquet(comp_path / "predictions_resnet50_species_noise_00.parquet", index=False)
+            mismatch_pred_df.to_csv(comp_path / "predictions_resnet50_species_noise_00.csv", index=False)
 
-            with self.assertRaises(ValueError):
+            with self.assertRaises(FileNotFoundError):
                 load_prepared_baseline_benchmark(tmp_path, methods=["resnet50_species"], noise_levels=[0.0])
 
     def test_r06_load_prepared_baseline_benchmark_missing_dir(self):
@@ -351,13 +336,17 @@ class TestN06Kraken2BlastnBenchmark(unittest.TestCase):
         self.assertLess(duration, 60.0, f"Notebook 09 took {duration:.2f}s (>60s)")
 
         # Verify exports
-        base_dir = Path("results_reproduction/baselines")
+        base_dir = Path(global_ns["output_dir"])
         self.assertTrue((base_dir / "exact_overlap_audit.csv").exists())
         self.assertTrue((base_dir / "benchmark_metrics_stratified.csv").exists())
         self.assertTrue((base_dir / "paired_discordance.csv").exists())
         self.assertTrue((base_dir / "species_cluster_bootstrap.csv").exists())
         self.assertTrue((base_dir / "figure_benchmark_overlap.png").exists())
         self.assertTrue((base_dir / "manifest_09_baselines.json").exists())
+        with (base_dir / "manifest_09_baselines.json").open(encoding="utf-8") as f:
+            run_manifest = json.load(f)
+        self.assertTrue(run_manifest["is_smoke_test"])
+        self.assertFalse(run_manifest["scientific_reproduction_certified"])
 
         audit_df = pd.read_csv(base_dir / "exact_overlap_audit.csv")
         self.assertEqual(len(audit_df), 40)
