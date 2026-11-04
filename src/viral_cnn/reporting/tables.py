@@ -301,11 +301,32 @@ def generate_all_tables(
     results_dir: Path = Path("results_reproduction"),
     strict_empirical: bool = False,
     formats: tuple[str, ...] = ("csv", "md", "tex"),
+    publication_config: Path | None = None,
 ) -> dict[int, pd.DataFrame]:
-    """Generate all 12 publication tables, reconcile artifacts, and save to disk."""
+    """Generate tables; strict mode requires a C06 explicit evidence selection.
+
+    ``strict_empirical=False`` preserves the legacy historical generator. New C06
+    publication output is rendered from the selected artifacts only.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir = Path(results_dir)
+
+    if strict_empirical:
+        if publication_config is None:
+            raise RuntimeError(
+                "Strict empirical table generation requires publication_config; "
+                "directory-wide manifest discovery is not an admissibility check."
+            )
+        from viral_cnn.reporting.publication import load_publication_config, render_tables, validate_selection
+
+        config = load_publication_config(Path(publication_config))
+        rows = validate_selection(config, strict_empirical=True)
+        render_tables(config, output_dir, rows)
+        return {
+            int(item["item_id"][1:]): pd.read_csv(output_dir / f"table_{item['item_id'][1:]}.csv")
+            for item in config["items"] if item["item_id"].startswith("T")
+        }
 
     # 1. Enforce strict empirical check if requested
     if strict_empirical:

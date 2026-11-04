@@ -27,13 +27,14 @@
 | AD-021 | Baseline short pareado C03 exige queries materializadas comuns por taxa, ruído uniforme com reposição incluindo a base original, overlap forward/RC e manifesto COMPLETE por método-condição; smoke e históricos com substituição obrigatória não são evidência C03. | Identidade de IDs isolada não comprova igualdade de sequência, ordem de classes, referência ou execução concluída; saída sem accession mantém identidade genômica `unknown`. | active | 2026-11-03 |
 | AD-022 | C04 estima ICs por bootstrap estratificado de fragmentos com suporte fixo por táxon; Macro-F1 inclui todas as classes declaradas. Temperatura limpa é ajustada na validação identificada, selada antes do teste, e bins/figuras comparativas preservam suporte antes/depois. | Incerteza é condicional à população observada e não mede variabilidade de treino ou genomas independentes; smoke não pode ser admitido como evidência empírica. | active | 2026-11-03 |
 | AD-023 | C05 usa o protocolo `c05_finetune_audit_v1` com linhagem/hash/ordem de classes, papéis last/best/selected e resume apenas por escolha explícita com identidade e estados completos; a comparação scratch pareada `c05_controlled_scratch_v1` permanece `NOT_RUN` sem ativação e orçamento completo de seis execuções. | Preserva adaptações históricas e impede promoção de smoke, checkpoint por nome ou piloto de 200 passos a evidência empírica ou causal. | active | 2026-11-03 |
+| AD-024 | Pacotes de publicação usam `c06_strict_v1`: seleção explícita dos 17 itens, hashes e manifestos por entrada, matriz com estados separados e namespace C00 exclusivo; fontes históricas não são completadas retrospectivamente nem substituem evidência selecionada. | Persistência de hashes, nomes de status e identidade de execução será consumida por auditorias e manuscritos posteriores; falhas de proveniência mantêm o pacote bloqueado. | active | 2026-11-04 |
 
 ## Handoff
 
-**Feature**: c05-finetune-e-comparacao-controlada
-**Where**: fine-tuning mínimo C05 com entradas identificadas, namespaces exclusivos, checkpoints atômicos/retomáveis e avaliação pós-seleção; comparação pareada S4 não ativada.
-**In progress**: implementação S1-S3 e verificação independente concluídas; execução empírica C05 e comparação S4 não realizadas.
-**Next step**: quando dados/checkpoints canônicos estiverem disponíveis, executar os notebooks 03/04 e revisar seus manifestos; S4 requer ativação e orçamento completo explícitos.
-**Blockers**: `/home/mlima/workspace` e checkpoints Species canônicos não estão disponíveis localmente; nenhum resultado real foi produzido ou reproduzido.
-**Uncommitted**: relatório de verificação/lessons e saídas sintéticas locais; diretórios de resultados anteriores C02/C03/C04 preservados.
+**Feature**: c06-regeneracao-e-reconciliacao-estrita
+**Where**: seleção explícita `c06_strict_v1`, matriz e gate de evidência, montagem isolada de tabelas/figuras/manuscritos e compilação com hashes.
+**In progress**: implementação C06 e testes sintéticos locais; validação empírica e editorial ainda pendentes.
+**Next step**: preencher `configs/publication_c06.yaml` com artefatos/manifests canônicos identificados, rodar C06 estrito no ambiente de dados e revisar discrepâncias/status editoriais.
+**Blockers**: `/home/mlima/workspace`, dados/checkpoints canônicos e pacote empírico completo T1–T12/F1–F5 não estão disponíveis nesta sessão; nenhuma reprodução integral foi produzida.
+**Uncommitted**: implementação e contratos C06; resultados locais anteriores preservados.
 **Branch**: main

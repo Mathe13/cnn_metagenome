@@ -321,22 +321,26 @@ python3 scripts/run_long_voter.py \
 
 ### 8. Regenerating Paper Tables & Figures
 
-Regenerate all publication artifacts from reproduction results:
+The publication path uses an explicit C06 selection in `configs/publication_c06.yaml`. Each of the 12 tables and five figures must name its artifact, manifest, SHA-256, protocol, transformation, and expected scientific identity. The checked-in configuration is an unpopulated template, so the strict command currently writes a diagnostic matrix and exits blocked until canonical evidence is selected. Historical tables and fallback figures are never admitted as empirical inputs.
 
 ```bash
-# Generate LaTeX and CSV tables (Tables 1 through 12)
-python3 scripts/generate_paper_tables.py --output-dir paper/tables
+# Strict package assembly (default for the table, figure, and compile CLIs)
+PYTHONPATH=src python3 scripts/assemble_publication.py --mode strict
 
-# Generate publication figures (Figures 1 through 5)
-python3 scripts/generate_paper_figures.py --output-dir paper/figures
+# Preserve a diagnostic matrix while inputs are incomplete; exit 0 means diagnostic output was written,
+# not that empirical regeneration passed.
+PYTHONPATH=src python3 scripts/assemble_publication.py --mode diagnostic
 ```
+
+Outputs are reserved under `results_reproduction/runs/<run_id>/publication/`. A completed evidence selection renders tables, data-backed PNG/PDF figures, review/submission sources, compilation logs, and a versioned manifest there. The strict gate checks explicit non-smoke mode, input and output hashes, protocol and transformation identity, split/seed, declared support, and figure selection metadata. Do not mark historical values reproduced from a diagnostic run. For an explicitly historical review only, the old table/figure generators require `--mode legacy`.
 
 ### 9. Compiling Manuscript Documents
 
-Compile both review (with reviewer macro callouts) and clean submission LaTeX documents:
+The strict compile CLI assembles and compiles the same selected C06 package. A historical source can be compiled only by explicitly selecting legacy mode:
 
 ```bash
-python3 scripts/compile_paper.py --target both
+PYTHONPATH=src python3 scripts/compile_paper.py --mode strict
+python3 scripts/compile_paper.py --mode legacy --variant submission
 ```
 
 ---
