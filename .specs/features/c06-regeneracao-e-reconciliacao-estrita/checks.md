@@ -131,5 +131,5 @@ Proof: `PYTHONPATH=src python3 -m unittest -k test_synthetic_run_and_final_repor
 - S1 ~11k + S2 ~14k + S3 ~12.5k + S4 ~14k = ~51.5k tokens; escopo previsto de reporting, CLIs, notebook, manifesto, documentação e testes: ~240 KB / 4 ≈ 60k tokens, abaixo do budget `light` de 150k.
 - Mecanismo: um builder; não há corte de superfície necessário.
 - **Boundary:** implementação C06 concluída; 27 seletores nomeados passaram individualmente e os 28 testes C06 passaram em conjunto. Montagem empírica continua bloqueada até selecionar dados/checkpoints e manifestos canônicos.
-- **Settled mid-build:** manifesto registra run_id do namespace C00. A fonte histórica disponível contém 57 chamadas `\\notavdois`, enquanto o critério aprovado descreve 56; a transformação preserva as chamadas encontradas e a divergência fica registrada para revisão independente.
+- **Settled mid-build:** manifesto registra run_id do namespace C00. A fonte histórica disponível contém 56 chamadas `\\notavdois`, conforme o critério aprovado; a submission tem zero chamadas.
 - **Abandoned:** nenhum.
