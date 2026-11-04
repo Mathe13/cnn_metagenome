@@ -7,10 +7,13 @@ and independent linear probing.
 from __future__ import annotations
 
 import math
+import atexit
 import hashlib
 import json
 import os
+import re
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -21,6 +24,159 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from viral_cnn.utils.logging_utils import log_artifact_path
+
+
+class LatentMemoryBudget:
+    """Allocate latent-analysis arrays in RAM up to a shared budget, then spill to disk."""
+
+    def __init__(
+        self,
+        budget_bytes: int,
+        spill_dir: Union[str, Path],
+        *,
+        observe_system_memory: bool = True,
+    ) -> None:
+        if not isinstance(budget_bytes, int) or budget_bytes < 0:
+            raise ValueError("Latent RAM budget must be a non-negative integer number of bytes")
+        self.budget_bytes = budget_bytes
+        self.spill_dir = Path(spill_dir)
+        self.observe_system_memory = observe_system_memory
+        self.ram_bytes = 0
+        self.spill_bytes = 0
+        self.spill_paths: List[Path] = []
+        self._arrays: List[np.ndarray] = []
+        self._closed = False
+        atexit.register(self.close)
+
+    @staticmethod
+    def available_ram_bytes() -> int:
+        """Return currently available host RAM using procfs or the POSIX fallback."""
+        meminfo = Path("/proc/meminfo")
+        if meminfo.is_file():
+            for line in meminfo.read_text().splitlines():
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+            else:
+                available = 0
+            for current_path, maximum_path in (
+                (Path("/sys/fs/cgroup/memory.current"), Path("/sys/fs/cgroup/memory.max")),
+                (Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"), Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")),
+            ):
+                if current_path.is_file() and maximum_path.is_file():
+                    try:
+                        current = int(current_path.read_text().strip())
+                        raw_maximum = maximum_path.read_text().strip()
+                        if raw_maximum != "max":
+                            maximum = int(raw_maximum)
+                            if maximum > 0:
+                                available = min(available, max(0, maximum - current))
+                    except (OSError, ValueError):
+                        pass
+            if available:
+                return available
+        try:
+            return int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+        except (AttributeError, OSError, ValueError) as exc:
+            raise RuntimeError("Cannot determine available host RAM; set LATENT_RAM_BUDGET_MB explicitly") from exc
+
+    @classmethod
+    def from_environment(cls, *, spill_dir: Optional[Union[str, Path]] = None) -> "LatentMemoryBudget":
+        """Build the execution-wide memory budget from the notebook environment."""
+        raw = os.environ.get("LATENT_RAM_BUDGET_MB")
+        if raw is None:
+            budget_bytes = int(cls.available_ram_bytes() * 0.30)
+        else:
+            if not re.fullmatch(r"\d+", raw.strip()):
+                raise ValueError("LATENT_RAM_BUDGET_MB must be a non-negative integer")
+            budget_bytes = int(raw) * 1024 * 1024
+        target = Path(spill_dir or os.environ.get("LATENT_SPILL_DIR", tempfile.gettempdir()))
+        return cls(budget_bytes, target)
+
+    @property
+    def spill_count(self) -> int:
+        return len(self.spill_paths)
+
+    def release(self, *arrays: np.ndarray) -> None:
+        """Release arrays no longer needed and delete only their owned spill files."""
+        for array in arrays:
+            index = next((i for i, owned in enumerate(self._arrays) if owned is array), None)
+            if index is None:
+                continue
+            self._arrays.pop(index)
+            nbytes = int(array.nbytes)
+            if isinstance(array, np.memmap):
+                array.flush()
+                path = Path(array.filename)
+                mmap = getattr(array, "_mmap", None)
+                if mmap is not None:
+                    mmap.close()
+                path.unlink(missing_ok=True)
+                self.spill_bytes -= nbytes
+                self.spill_paths = [item for item in self.spill_paths if item != path]
+            else:
+                self.ram_bytes -= nbytes
+
+    def report(self) -> Dict[str, Any]:
+        """Return the effective budget and current managed storage totals."""
+        return {
+            "budget_bytes": self.budget_bytes,
+            "ram_bytes": self.ram_bytes,
+            "spill_bytes": self.spill_bytes,
+            "spill_count": self.spill_count,
+            "spill_dir": str(self.spill_dir.resolve()),
+        }
+
+    def allocate(self, shape: Tuple[int, ...], dtype: Any, name: str) -> np.ndarray:
+        """Allocate a zero-initialized array in RAM or in an exclusive disk-backed memmap."""
+        if self._closed:
+            raise RuntimeError("Latent memory budget is closed")
+        dtype = np.dtype(dtype)
+        nbytes = int(np.prod(shape, dtype=np.int64)) * dtype.itemsize
+        pressure = self.observe_system_memory and self.available_ram_bytes() < self.budget_bytes
+        if nbytes == 0 or (not pressure and self.ram_bytes + nbytes <= self.budget_bytes):
+            try:
+                array = np.empty(shape, dtype=dtype)
+                self.ram_bytes += nbytes
+                self._arrays.append(array)
+                return array
+            except MemoryError:
+                pass
+
+        self.spill_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)[:48] or "array"
+        path = self.spill_dir / f"latent_{os.getpid()}_{uuid.uuid4().hex}_{safe_name}.mmap"
+        try:
+            with path.open("xb") as stream:
+                if nbytes:
+                    os.posix_fallocate(stream.fileno(), 0, nbytes)
+            array = np.memmap(path, mode="r+", dtype=dtype, shape=shape)
+        except (OSError, AttributeError) as exc:
+            path.unlink(missing_ok=True)
+            raise OSError(f"Cannot allocate latent spill array at {path}: {exc}") from exc
+        array.fill(0)
+        self.spill_paths.append(path)
+        self.spill_bytes += nbytes
+        self._arrays.append(array)
+        log_artifact_path("latent spill array", path, extra=f"shape={shape}, dtype={dtype}, bytes={nbytes}")
+        return array
+
+    def close(self) -> None:
+        """Flush and remove only temporary arrays owned by this budget."""
+        if self._closed:
+            return
+        for array in self._arrays:
+            if isinstance(array, np.memmap):
+                array.flush()
+                mmap = getattr(array, "_mmap", None)
+                if mmap is not None:
+                    mmap.close()
+        for path in self.spill_paths:
+            path.unlink(missing_ok=True)
+        self._arrays.clear()
+        self._closed = True
 
 
 @dataclass
@@ -50,9 +206,16 @@ def _sha256_file(path: Union[str, Path]) -> str:
     return digest.hexdigest()
 
 
-def save_embedding_artifact(artifact: EmbeddingArtifact, cache_prefix: Union[str, Path]) -> Path:
-    """Write immutable split-specific parquet and JSON provenance sidecar."""
+def save_embedding_artifact(
+    artifact: EmbeddingArtifact,
+    cache_prefix: Union[str, Path],
+    *,
+    batch_size: int = 4096,
+) -> Path:
+    """Write an immutable split artifact by row groups without duplicating all features in RAM."""
     artifact.validate()
+    if batch_size < 1:
+        raise ValueError("Artifact write batch_size must be a positive integer")
     prefix = Path(cache_prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     fingerprint = hashlib.sha256(json.dumps(artifact.manifest, sort_keys=True).encode()).hexdigest()
@@ -60,24 +223,50 @@ def save_embedding_artifact(artifact: EmbeddingArtifact, cache_prefix: Union[str
     manifest_path = parquet_path.with_suffix(".json")
     if parquet_path.exists() or manifest_path.exists():
         raise FileExistsError(f"Refusing to overwrite existing embedding artifact: {parquet_path}")
-    frame = pd.DataFrame({"features": list(artifact.features), "label": artifact.labels, "row_id": artifact.row_ids})
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     print(f"[LOG_PATH] Saving embedding artifact to: {parquet_path.resolve()}")
     with tempfile.NamedTemporaryFile(dir=prefix.parent, suffix=".parquet", delete=False) as temp:
         temp_path = Path(temp.name)
+    temp_manifest = manifest_path.with_suffix(".json.tmp")
     try:
-        frame.to_parquet(temp_path, index=False)
+        feature_type = pa.list_(pa.float32(), list_size=int(artifact.features.shape[1]))
+        schema = pa.schema([("features", feature_type), ("label", pa.int64()), ("row_id", pa.string())])
+        with pq.ParquetWriter(temp_path, schema=schema) as writer:
+            for start in range(0, len(artifact.features), batch_size):
+                stop = min(start + batch_size, len(artifact.features))
+                feature_values = np.asarray(artifact.features[start:stop], dtype=np.float32)
+                flat = pa.array(feature_values.reshape(-1), type=pa.float32())
+                feature_array = pa.FixedSizeListArray.from_arrays(flat, list_size=feature_values.shape[1])
+                table = pa.Table.from_arrays(
+                    [feature_array, pa.array(artifact.labels[start:stop], type=pa.int64()),
+                     pa.array(artifact.row_ids[start:stop].astype(str), type=pa.string())],
+                    schema=schema,
+                )
+                writer.write_table(table, row_group_size=batch_size)
         os.replace(temp_path, parquet_path)
         manifest = dict(artifact.manifest, schema_version=1, artifact_sha256=_sha256_file(parquet_path), fingerprint=fingerprint)
-        temp_manifest = manifest_path.with_suffix(".json.tmp")
         temp_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         os.replace(temp_manifest, manifest_path)
+    except Exception:
+        parquet_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        temp_manifest.unlink(missing_ok=True)
+        raise
     finally:
         temp_path.unlink(missing_ok=True)
     return parquet_path
 
 
-def load_embedding_artifact(path: Union[str, Path], expected: Dict[str, Any]) -> EmbeddingArtifact:
-    """Load a cache only after the full expected provenance identity matches."""
+def load_embedding_artifact(
+    path: Union[str, Path],
+    expected: Dict[str, Any],
+    *,
+    memory_manager: Optional[LatentMemoryBudget] = None,
+    batch_size: int = 4096,
+) -> EmbeddingArtifact:
+    """Load a verified cache into budget-managed arrays, reading Parquet in batches."""
     required_identity = {
         "variant", "split", "partitions", "partition_sha256", "checkpoint", "checkpoint_sha256",
         "class_order", "encoding", "sampling", "mode", "extractor_code_sha256",
@@ -103,8 +292,42 @@ def load_embedding_artifact(path: Union[str, Path], expected: Dict[str, Any]) ->
             raise ValueError(f"Stale embedding cache {path}: {key} expected {value!r}, found {manifest.get(key)!r}")
     if manifest.get("artifact_sha256") != _sha256_file(path):
         raise ValueError(f"Corrupt embedding cache checksum: {path}")
-    frame = pd.read_parquet(path)
-    artifact = EmbeddingArtifact(np.stack(frame.features.to_numpy()), frame.label.to_numpy(), frame.row_id.to_numpy(), manifest)
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if batch_size < 1:
+        raise ValueError("Artifact read batch_size must be a positive integer")
+    parquet = pq.ParquetFile(path)
+    n_rows = parquet.metadata.num_rows
+    feature_field = parquet.schema_arrow.field("features").type
+    dimension = int(feature_field.list_size) if pa.types.is_fixed_size_list(feature_field) else None
+    if dimension is None:
+        first = next(parquet.iter_batches(batch_size=1, columns=["features"]), None)
+        if first is None:
+            raise ValueError(f"Embedding artifact is empty: {path}")
+        dimension = len(first.column(0)[0].as_py())
+    manager = memory_manager or LatentMemoryBudget.from_environment()
+    features = manager.allocate((n_rows, dimension), np.float32, "loaded_features")
+    labels = manager.allocate((n_rows,), np.int64, "loaded_labels")
+    row_ids = manager.allocate((n_rows,), "U256", "loaded_row_ids")
+    offset = 0
+    for record_batch in parquet.iter_batches(batch_size=batch_size):
+        size = record_batch.num_rows
+        feature_column = record_batch.column(record_batch.schema.get_field_index("features"))
+        if pa.types.is_fixed_size_list(feature_column.type):
+            feature_values = feature_column.values.to_numpy(zero_copy_only=False).reshape(size, dimension)
+        else:
+            feature_values = np.stack([np.asarray(value.as_py(), dtype=np.float32) for value in feature_column])
+        features[offset:offset + size] = feature_values
+        labels[offset:offset + size] = record_batch.column(record_batch.schema.get_field_index("label")).to_numpy()
+        ids = record_batch.column(record_batch.schema.get_field_index("row_id")).to_pylist()
+        if any(len(value) > 256 for value in ids):
+            raise ValueError("Embedding row identity exceeds the supported 256-character storage width")
+        row_ids[offset:offset + size] = ids
+        offset += size
+    if offset != n_rows:
+        raise RuntimeError(f"Embedding artifact row count changed while reading {path}: {offset} != {n_rows}")
+    artifact = EmbeddingArtifact(features, labels, row_ids, manifest)
     artifact.validate()
     return artifact
 
@@ -179,6 +402,8 @@ def extract_latent_embeddings(
     *,
     return_identities: bool = False,
     return_logits: bool = False,
+    return_predictions: bool = False,
+    memory_manager: Optional[LatentMemoryBudget] = None,
 ) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, ...]]:
     """
     Extracts high-dimensional pre-classifier embeddings by registering a forward
@@ -191,14 +416,44 @@ def extract_latent_embeddings(
     if not hasattr(target_model, "fc") or not isinstance(target_model.fc, nn.Linear):
         raise AttributeError("Model must have an `fc` attribute of type `nn.Linear`")
 
-    features_list: List[np.ndarray] = []
-    labels_list: List[np.ndarray] = []
-    identities_list: List[np.ndarray] = []
-    logits_list: List[np.ndarray] = []
+    if return_logits and return_predictions:
+        raise ValueError("Request either full logits or Top-1 predictions, not both")
+    manager = memory_manager or LatentMemoryBudget.from_environment()
+
+    dataset = getattr(dataloader, "dataset", None)
+    expected_rows = getattr(dataset, "total_samples", None)
+    if expected_rows is None and dataset is not None:
+        try:
+            expected_rows = len(dataset)
+        except TypeError:
+            expected_rows = None
+    if expected_rows is None and isinstance(dataloader, (list, tuple)):
+        expected_rows = sum(len(batch[1]) for batch in dataloader)
+    if expected_rows is None:
+        try:
+            batch_count = len(dataloader)
+            batch_size = getattr(dataloader, "batch_size", None)
+            if batch_size is not None:
+                expected_rows = batch_count * batch_size
+        except TypeError:
+            expected_rows = None
+    if expected_rows is None:
+        raise ValueError("Latent extraction requires a dataset with a known sample count for bounded storage")
+    expected_rows = int(expected_rows)
+    if expected_rows < 0:
+        raise ValueError("Latent extraction sample count cannot be negative")
+
+    features = manager.allocate((expected_rows, target_model.fc.in_features), np.float32, "extracted_features")
+    labels_out = manager.allocate((expected_rows,), np.int64, "extracted_labels")
+    identities_out = manager.allocate((expected_rows,), "U256", "extracted_row_ids") if return_identities else None
+    logits_out = manager.allocate((expected_rows, target_model.fc.out_features), np.float32, "extracted_logits") if return_logits else None
+    predictions_out = manager.allocate((expected_rows,), np.int64, "extracted_top1") if return_predictions else None
+    offset = 0
+    captured_features: Optional[torch.Tensor] = None
 
     def pre_hook_fn(module: nn.Module, inputs: Tuple[torch.Tensor, ...]) -> None:
-        feat = inputs[0].detach().cpu().to(torch.float32).numpy()
-        features_list.append(feat)
+        nonlocal captured_features
+        captured_features = inputs[0].detach()
 
     handle = target_model.fc.register_forward_pre_hook(pre_hook_fn)
 
@@ -217,47 +472,41 @@ def extract_latent_embeddings(
 
                 inputs = inputs.to(dev)
                 logits = model(inputs)
-                if return_logits:
-                    logits_list.append(logits.detach().cpu().to(torch.float32).numpy())
-
-                if isinstance(labels, torch.Tensor):
-                    labels_list.append(labels.detach().cpu().numpy())
-                else:
-                    labels_list.append(np.asarray(labels))
+                if captured_features is None:
+                    raise RuntimeError("The classifier pre-hook did not capture an embedding batch")
+                batch_features = captured_features.to(device="cpu", dtype=torch.float32).numpy()
+                batch_labels = labels.detach().cpu().numpy() if isinstance(labels, torch.Tensor) else np.asarray(labels)
+                batch_size = len(batch_labels)
+                stop = offset + batch_size
+                if stop > expected_rows:
+                    raise RuntimeError(f"Latent extraction produced more than {expected_rows} declared rows")
+                features[offset:stop] = batch_features
+                labels_out[offset:stop] = batch_labels
                 if return_identities:
                     if row_ids is None:
                         raise ValueError("Identity-aware extraction requires row IDs from the source dataset")
-                    identities_list.append(np.asarray(row_ids, dtype=str))
+                    batch_ids = np.asarray(row_ids, dtype=str)
+                    if len(batch_ids) != batch_size or any(len(value) > 256 for value in batch_ids):
+                        raise ValueError("Row identities must align with the batch and fit within 256 characters")
+                    identities_out[offset:stop] = batch_ids
+                if return_logits:
+                    logits_out[offset:stop] = logits.detach().to(device="cpu", dtype=torch.float32).numpy()
+                elif return_predictions:
+                    predictions_out[offset:stop] = logits.argmax(dim=1).detach().cpu().numpy()
+                captured_features = None
+                offset = stop
     finally:
         handle.remove()
 
-    if not features_list:
-        empty = (np.empty((0, target_model.fc.in_features), dtype=np.float32), np.empty((0,), dtype=np.int64))
-        extra = (np.empty((0,), dtype=str),) if return_identities else ()
-        extra += (np.empty((0, target_model.fc.out_features), dtype=np.float32),) if return_logits else ()
-        return (*empty, *extra)
-
-    all_features = np.concatenate(features_list, axis=0)
-    all_labels = np.concatenate(labels_list, axis=0)
-    if not (len(all_features) == len(all_labels)):
-        raise RuntimeError("Feature and label counts diverged during extraction")
+    if offset != expected_rows:
+        raise RuntimeError(f"Latent extraction produced {offset} rows; expected {expected_rows}")
+    result: Tuple[Any, ...] = (features, labels_out)
     if return_identities:
-        all_ids = np.concatenate(identities_list)
-        if len(all_ids) != len(all_features):
-            raise RuntimeError("Feature and row identity counts diverged during extraction")
-    else:
-        all_ids = None
+        result += (identities_out,)
     if return_logits:
-        all_logits = np.concatenate(logits_list)
-        if len(all_logits) != len(all_features):
-            raise RuntimeError("Feature and logit counts diverged during extraction")
-    else:
-        all_logits = None
-    result: Tuple[Any, ...] = (all_features, all_labels)
-    if return_identities:
-        result += (all_ids,)
-    if return_logits:
-        result += (all_logits,)
+        result += (logits_out,)
+    if return_predictions:
+        result += (predictions_out,)
     return result
 
 
@@ -835,8 +1084,8 @@ class LinearProbeClassifier(nn.Module):
         self._sealed_sha256: Optional[str] = None
         self._test_evaluated = False
         self._selection_history: List[Dict[str, float]] = []
-        self._training_row_ids: set = set()
-        self._validation_row_ids: set = set()
+        self._training_partition_hashes: set = set()
+        self._validation_partition_hashes: set = set()
 
     @staticmethod
     def _state_hash(module: nn.Module) -> str:
@@ -861,14 +1110,18 @@ class LinearProbeClassifier(nn.Module):
         """Fit only on verified train rows, select by validation accuracy, then freeze the protocol."""
         if self._audit_state != "UNFITTED":
             raise RuntimeError(f"Probe cannot be fitted in state {self._audit_state}")
+        if batch_size < 1:
+            raise ValueError("Training and validation batch_size must be a positive integer")
         train.validate()
         validation.validate()
         if train.manifest["split"] != "train" or validation.manifest["split"] != "validation":
             raise ValueError("Audited probe requires train and validation embedding artifacts")
         if train.manifest.get("variant") != validation.manifest.get("variant"):
             raise ValueError("Train and validation artifacts belong to different model variants")
-        if set(train.row_ids).intersection(validation.row_ids):
-            raise ValueError("Train and validation row identities overlap")
+        train_hashes = set(train.manifest.get("partition_sha256", []))
+        validation_hashes = set(validation.manifest.get("partition_sha256", []))
+        if not train_hashes or not validation_hashes or train_hashes.intersection(validation_hashes):
+            raise ValueError("Train and validation partition identities are missing or overlap")
         if train.features.shape[1] != self.fc.in_features or validation.features.shape[1] != self.fc.in_features:
             raise ValueError("Embedding dimensions do not match the probe input dimension")
         if np.any(train.labels < 0) or np.any(train.labels >= self.fc.out_features):
@@ -885,8 +1138,7 @@ class LinearProbeClassifier(nn.Module):
         criterion = nn.CrossEntropyLoss()
         best_accuracy = -1.0
         best_state = None
-        X_val = torch.as_tensor(validation.features, dtype=torch.float32, device=dev)
-        y_val = np.asarray(validation.labels, dtype=np.int64)
+        y_val = torch.as_tensor(validation.labels, dtype=torch.long, device=dev)
         for epoch in range(epochs):
             self.train()
             for bx, by in loader:
@@ -895,9 +1147,14 @@ class LinearProbeClassifier(nn.Module):
                 criterion(self(bx), by).backward()
                 optimizer.step()
             self.eval()
+            correct_count = torch.zeros((), dtype=torch.int64, device=dev)
             with torch.inference_mode():
-                val_pred = self(X_val).argmax(dim=1).cpu().numpy()
-            accuracy = float(np.mean(val_pred == y_val)) if len(y_val) else 0.0
+                for start in range(0, len(validation.features), batch_size):
+                    stop = min(start + batch_size, len(validation.features))
+                    batch_x = torch.as_tensor(validation.features[start:stop], dtype=torch.float32, device=dev)
+                    batch_pred = self(batch_x).argmax(dim=1)
+                    correct_count += (batch_pred == y_val[start:stop]).sum()
+            accuracy = int(correct_count.cpu()) / len(y_val) if len(y_val) else 0.0
             self._selection_history.append({"epoch": epoch + 1, "validation_accuracy": accuracy})
             if accuracy > best_accuracy:
                 best_accuracy = accuracy
@@ -905,8 +1162,8 @@ class LinearProbeClassifier(nn.Module):
         if best_state is None:
             raise ValueError("Validation artifact is empty; cannot select probe weights")
         self.load_state_dict(best_state)
-        self._training_row_ids = set(train.row_ids.tolist())
-        self._validation_row_ids = set(validation.row_ids.tolist())
+        self._training_partition_hashes = train_hashes
+        self._validation_partition_hashes = validation_hashes
         self.eval()
         self._audit_state = "SEALED"
         self._sealed_sha256 = self._state_hash(self)
@@ -921,7 +1178,14 @@ class LinearProbeClassifier(nn.Module):
             "validation_manifest": dict(validation.manifest),
         }
 
-    def evaluate_artifact(self, test: EmbeddingArtifact, device: str = "cpu") -> Dict[str, Any]:
+    def evaluate_artifact(
+        self,
+        test: EmbeddingArtifact,
+        device: str = "cpu",
+        *,
+        batch_size: int = 256,
+        include_row_ids: bool = True,
+    ) -> Dict[str, Any]:
         """Evaluate once on a verified test artifact after the selected weights are sealed."""
         if self._test_evaluated:
             raise RuntimeError("Sealed probe test evaluation may occur only once")
@@ -930,14 +1194,20 @@ class LinearProbeClassifier(nn.Module):
         test.validate()
         if test.manifest["split"] != "test":
             raise ValueError("Final probe evaluation requires a test embedding artifact")
-        test_ids = set(test.row_ids.tolist())
-        if test_ids.intersection(self._training_row_ids) or test_ids.intersection(self._validation_row_ids):
-            raise ValueError("Test row identities overlap train or validation probe examples")
+        test_hashes = set(test.manifest.get("partition_sha256", []))
+        if (not test_hashes or test_hashes.intersection(self._training_partition_hashes)
+                or test_hashes.intersection(self._validation_partition_hashes)):
+            raise ValueError("Test partition identities overlap train/validation or are missing")
         if self._state_hash(self) != self._sealed_sha256:
             raise RuntimeError("Sealed probe weights changed before test evaluation")
-        result = self.evaluate(test.features, test.labels, device=device)
-        result.update({"row_ids": test.row_ids.tolist(), "weights_sha256": self._sealed_sha256,
+        result = self.evaluate(test.features, test.labels, device=device, batch_size=batch_size)
+        identity_hash = hashlib.sha256()
+        for start in range(0, len(test.row_ids), 65536):
+            identity_hash.update(np.asarray(test.row_ids[start:start + 65536]).tobytes())
+        result.update({"row_ids_sha256": identity_hash.hexdigest(), "weights_sha256": self._sealed_sha256,
                        "supported_classes": int(np.unique(test.labels).size), "probe_protocol": "c01_train_val_frozen_v1"})
+        if include_row_ids:
+            result["row_ids"] = test.row_ids.tolist()
         self._test_evaluated = True
         self._audit_state = "TEST_EVALUATED"
         return result
@@ -993,35 +1263,54 @@ class LinearProbeClassifier(nn.Module):
         self.eval()
         return self
 
-    def evaluate(self, X_test: np.ndarray, y_test: np.ndarray, device: str = "cpu") -> Dict[str, float]:
-        """Evaluates linear probe on test set embeddings."""
+    def evaluate(
+        self,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        device: str = "cpu",
+        *,
+        batch_size: int = 256,
+    ) -> Dict[str, float]:
+        """Evaluate test embeddings in bounded batches with global class counts."""
+        if batch_size < 1:
+            raise ValueError("Evaluation batch_size must be a positive integer")
         self.eval()
         dev = torch.device(device)
         self.to(dev)
 
-        X_t = torch.as_tensor(X_test, dtype=torch.float32)
         y_true = np.asarray(y_test, dtype=np.int64)
-
-        with torch.no_grad():
-            logits = self(X_t.to(dev)).cpu().numpy()
-            y_pred = np.argmax(logits, axis=1)
-
-        acc = float(np.mean(y_pred == y_true)) if len(y_true) > 0 else 0.0
-
-        # Vectorized Macro-F1 via bincount
+        if len(X_test) != len(y_true):
+            raise ValueError("Test feature and label counts differ")
         num_classes = self.fc.out_features
-        tp = np.bincount(y_true[y_true == y_pred], minlength=num_classes)
-        pred_counts = np.bincount(y_pred, minlength=num_classes)
-        true_counts = np.bincount(y_true, minlength=num_classes)
-
-        denom = pred_counts + true_counts
+        if np.any(y_true < 0) or np.any(y_true >= num_classes):
+            raise ValueError("Test labels are outside the probe class range")
+        tp = torch.zeros(num_classes, dtype=torch.int64, device=dev)
+        pred_counts = torch.zeros(num_classes, dtype=torch.int64, device=dev)
+        true_counts = torch.zeros(num_classes, dtype=torch.int64, device=dev)
+        correct_count = torch.zeros((), dtype=torch.int64, device=dev)
+        with torch.no_grad():
+            for start in range(0, len(y_true), batch_size):
+                stop = min(start + batch_size, len(y_true))
+                bx = torch.as_tensor(X_test[start:stop], dtype=torch.float32, device=dev)
+                by = torch.as_tensor(y_true[start:stop], dtype=torch.long, device=dev)
+                pred = self(bx).argmax(dim=1)
+                correct = pred == by
+                correct_count += correct.sum()
+                true_counts += torch.bincount(by, minlength=num_classes)
+                pred_counts += torch.bincount(pred, minlength=num_classes)
+                tp += torch.bincount(by[correct], minlength=num_classes)
+        tp_np = tp.cpu().numpy()
+        pred_counts_np = pred_counts.cpu().numpy()
+        true_counts_np = true_counts.cpu().numpy()
+        denom = pred_counts_np + true_counts_np
         f1_per_class = np.zeros(num_classes, dtype=np.float64)
         valid = denom > 0
-        f1_per_class[valid] = 2.0 * tp[valid] / denom[valid]
-        macro_f1 = float(np.mean(f1_per_class[true_counts > 0])) if np.any(true_counts > 0) else 0.0
+        f1_per_class[valid] = 2.0 * tp_np[valid] / denom[valid]
+        macro_f1 = float(np.mean(f1_per_class[true_counts_np > 0])) if np.any(true_counts_np > 0) else 0.0
+        accuracy = int(correct_count.cpu()) / len(y_true) if len(y_true) else 0.0
 
         return {
-            "top1_accuracy": acc,
+            "top1_accuracy": accuracy,
             "macro_f1": macro_f1,
             "n_test_samples": len(y_true),
         }

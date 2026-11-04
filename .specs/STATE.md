@@ -30,11 +30,10 @@
 | AD-024 | Pacotes de publicação usam `c06_strict_v1`: seleção explícita dos 17 itens, hashes e manifestos por entrada, matriz com estados separados e namespace C00 exclusivo; fontes históricas não são completadas retrospectivamente nem substituem evidência selecionada. | Persistência de hashes, nomes de status e identidade de execução será consumida por auditorias e manuscritos posteriores; falhas de proveniência mantêm o pacote bloqueado. | active | 2026-11-04 |
 
 ## Handoff
-
-**Feature**: c06-regeneracao-e-reconciliacao-estrita
-**Where**: seleção explícita `c06_strict_v1`, matriz e gate de evidência, montagem isolada de tabelas/figuras/manuscritos e compilação com hashes.
-**In progress**: implementação C06 e testes sintéticos locais; validação empírica e editorial ainda pendentes.
-**Next step**: preencher `configs/publication_c06.yaml` com artefatos/manifests canônicos identificados, rodar C06 estrito no ambiente de dados e revisar discrepâncias/status editoriais.
-**Blockers**: `/home/mlima/workspace`, dados/checkpoints canônicos e pacote empírico completo T1–T12/F1–F5 não estão disponíveis nesta sessão; nenhuma reprodução integral foi produzida.
-**Uncommitted**: implementação e contratos C06; resultados locais anteriores preservados.
+**Feature**: c07-latent-batches-ram-spill
+**Where**: C1–C9 implementados; avaliações da sonda e extração em lotes, orçamento RAM padrão de 30% da memória disponível e spill temporário.
+**In progress**: verificação independente do diff e gate `validate_verification.py`.
+**Next step**: confirmar o relatório do verifier e fechar a feature; validar empiricamente no cluster quando dados/checkpoints estiverem disponíveis.
+**Blockers**: servidor remoto, dados e checkpoints não estão disponíveis nesta sessão; reprodução científica integral pendente.
+**Uncommitted**: implementação C07, testes, notebook 06 e documentação da feature.
 **Branch**: main

@@ -28,7 +28,7 @@ def artifact(split, rows, *, variant="tiny", verified=True):
         np.arange(len(rows), dtype=np.int64) % 2,
         np.asarray(rows, dtype=str),
         {"verified": verified, "split": split, "variant": variant,
-         "partitions": ["fixture.parquet"], "partition_sha256": ["partition-hash"],
+         "partitions": [f"{split}.parquet"], "partition_sha256": [f"partition-hash-{split}"],
          "checkpoint": "fixture.pt", "checkpoint_sha256": "checkpoint-hash",
          "class_order": [0, 1], "encoding": {"channels": ["A", "C", "G", "T"]},
          "sampling": {"rule": "all", "seed": 42}, "mode": "synthetic",
@@ -206,14 +206,15 @@ class NotebookContractTests(unittest.TestCase):
         self.assertIn("fit_select_and_seal", self.source)
         self.assertIn("evaluate_artifact(test", self.source)
         self.assertIn("Test_Row_IDs", self.source)
-        self.assertIn("native_test_logits", self.source)
+        self.assertIn("native_test_predictions", self.source)
+        self.assertNotIn("native_test_logits", self.source)
         self.assertIn('"Linear_Probe_Test_Acc"', self.source)
         self.assertIn('"Linear_Probe_Macro_F1"', self.source)
         self.assertIn('"N"', self.source)
         self.assertIn('"Supported_Classes"', self.source)
         cell = next("".join(c["source"]) for c in self.notebook["cells"] if c.get("cell_type") == "code" and "fit_select_and_seal" in "".join(c.get("source", [])))
         self.assertIn("test_ids", cell)
-        self.assertIn('"Test_Row_IDs"', self.source)
+        self.assertIn('"Test_Row_IDs_SHA256"', self.source)
 
     def test_notebook_preflight_and_run_manifest_contract(self):
         self.assertIn("preflight_latent_inputs", self.source)
