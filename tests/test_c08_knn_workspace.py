@@ -215,6 +215,11 @@ class KNNWorkspaceTests(unittest.TestCase):
         actual = result["per_cluster_metrics"].set_index("class_label")["test_samples"]
         for cls, count in enumerate(expected_counts):
             self.assertEqual(int(actual.loc[cls]), int(count))
+            class_mask = true == cls
+            class_metrics = result["per_cluster_metrics"].set_index("class_label").loc[cls]
+            self.assertAlmostEqual(class_metrics["knn_accuracy"], np.mean(predictions[class_mask] == true[class_mask]))
+            self.assertAlmostEqual(class_metrics["knn_top5_accuracy"],
+                                   np.mean((reference_labels[class_mask] == true[class_mask, None]).any(axis=1)))
         scores = []
         original_mm = torch.mm
         def capture_scores(left, right):
@@ -274,6 +279,7 @@ class KNNWorkspaceTests(unittest.TestCase):
             table = pq.read_table(parquet_path)
             self.assertEqual(table.num_rows, result["n_query"])
             self.assertEqual(table.schema.field("neighbor_indices").type.list_size, 5)
+            np.testing.assert_array_equal(table.column("query_index").to_numpy(), result["query_indices"])
             restored = np.asarray(table.column("neighbor_indices").to_pylist(), dtype=np.int64)
             np.testing.assert_array_equal(restored, dense_neighbors(features, result["query_indices"], result["reference_indices"]))
             saved_ids = np.asarray(pq.read_table(artifact_path, columns=["row_id"]).column("row_id").to_pylist(), dtype=ids.dtype)
