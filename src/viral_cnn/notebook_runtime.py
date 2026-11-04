@@ -17,6 +17,7 @@ import logging
 import os
 import platform
 import hashlib
+import heapq
 import threading
 import random
 import subprocess
@@ -231,14 +232,10 @@ NOTEBOOK_REQUIREMENTS: Dict[str, List[Dict[str, Any]]] = {
     "short/09": [{"path": "short/kraken_blast_dir", "kind": "directory"}, {"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
     "short/10": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}],
     "short/11": [{"path": "short/ictv_master", "kind": "file"}, {"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"}],
-    "long/01": [{"path": "long/raw_database_final", "kind": "file"}],
-    "long/02": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "long/01": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}],
+    "long/02": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}, {"path": "long/mapping_species_final", "kind": "file"}, *[{"path": f"checkpoints/{v}", "kind": "file"} for v in ("resnet_clean_species", "resnet_noise_species", "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species")]],
     "long/03": [
-        {"path": "long/resultados_inferencia_long_reads_ResNet50.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ResNet50_Noise.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_Z.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_T.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_F.parquet", "kind": "file"},
+        {"path": "results_reproduction/long_voter/manifest_02_voter_inference.json", "kind": "file", "external": True},
     ],
     "long/04": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}],
 }
@@ -347,6 +344,13 @@ def reserve_run_directory(project_root: Union[str, Path], run_id: str, notebook_
         except FileExistsError as exc:
             raise FileExistsError(f"Run output already reserved: {target}") from exc
     return target
+
+
+def reserve_c02_long_run(project_root: Union[str, Path], notebook_id: str, run_id: Optional[str] = None) -> tuple[str, Path]:
+    """Reserve a collision-free namespace for one C02 notebook execution."""
+    import uuid
+    resolved_id = run_id or os.getenv("C02_LONG_RUN_ID") or f"c02-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    return resolved_id, reserve_run_directory(project_root, resolved_id, notebook_id)
 
 
 def file_identity(path: Union[str, Path]) -> Dict[str, Any]:
@@ -672,7 +676,7 @@ def resolve_split_files(
 def read_parquet_sample(
     path_or_files: Union[str, Path, Sequence[Union[str, Path]]],
     columns: Optional[List[str]] = None,
-    max_rows: int = 1000,
+    max_rows: Optional[int] = 1000,
     split: str = "test",
 ) -> pd.DataFrame:
     """
@@ -688,7 +692,7 @@ def read_parquet_sample(
 
     chunks: List[pd.DataFrame] = []
     collected = 0
-    batch_sz = max(1, min(max_rows, 8192))
+    batch_sz = 8192 if max_rows is None else max(1, min(max_rows, 8192))
 
     for fp in files:
         p = Path(fp)
@@ -706,17 +710,82 @@ def read_parquet_sample(
             df_batch = batch.to_pandas()
             chunks.append(df_batch)
             collected += len(df_batch)
-            if collected >= max_rows:
+            if max_rows is not None and collected >= max_rows:
                 break
-        if collected >= max_rows:
+        if max_rows is not None and collected >= max_rows:
             break
 
     if not chunks:
         return pd.DataFrame()
     out_df = pd.concat(chunks, ignore_index=True)
-    if len(out_df) > max_rows:
+    if max_rows is not None and len(out_df) > max_rows:
         out_df = out_df.iloc[:max_rows].copy()
     return out_df
+
+
+def read_parquet_hash_sample(
+    path_or_files: Union[str, Path, Sequence[Union[str, Path]]],
+    *,
+    columns: Sequence[str],
+    limit: Optional[int],
+    seed: int = 42,
+    split: str = "train",
+    sequence_column: Optional[str] = None,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Stream a deterministic bottom-k SHA-256 sample from Parquet partitions."""
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be positive or None for a census")
+    files = resolve_split_files(path_or_files, split_name=split)
+    log_artifact_path("ParquetHashSample", files, extra=f"split={split}, limit={limit}, seed={seed}")
+    records: list[tuple[int, str, Any]] = []
+    heap: list[tuple[int, int, str, Any]] = []
+    available = 0
+    eligible = 0
+    ordinal = 0
+    common_dir = Path(os.path.commonpath([str(Path(name).resolve().parent) for name in files])) if files else Path.cwd()
+    for file_name in files:
+        parquet_path = Path(file_name)
+        pf = pq.ParquetFile(parquet_path)
+        available += int(pf.metadata.num_rows)
+        present = set(pf.schema_arrow.names)
+        selected_columns = [c for c in columns if c in present]
+        if not selected_columns:
+            continue
+        seq_col = sequence_column if sequence_column in selected_columns else selected_columns[0]
+        relative = parquet_path.resolve().relative_to(common_dir).as_posix()
+        for batch in pf.iter_batches(batch_size=8192, columns=selected_columns):
+            values = batch.column(selected_columns.index(seq_col)).to_pylist()
+            for value in values:
+                row_id = f"{relative}#row={ordinal}"
+                ordinal += 1
+                if value is None:
+                    continue
+                eligible += 1
+                score = int.from_bytes(hashlib.sha256(f"{seed}:{row_id}".encode()).digest(), "big")
+                if limit is None:
+                    records.append((score, row_id, value))
+                elif limit > 0:
+                    entry = (-score, -eligible, row_id, value)
+                    if len(heap) < limit:
+                        heapq.heappush(heap, entry)
+                    elif score < -heap[0][0]:
+                        heapq.heapreplace(heap, entry)
+    if limit is not None:
+        records = [(-neg_score, row_id, value) for neg_score, _, row_id, value in heap]
+    records.sort(key=lambda row: (row[0], row[1]))
+    result = pd.DataFrame({"query_id": [r[1] for r in records], "sequence": [r[2] for r in records]})
+    metadata = {
+        "kind": "census" if limit is None or len(records) == eligible else "sample",
+        "available_count": int(available),
+        "population_count": int(eligible),
+        "excluded_count": int(available-eligible),
+        "planned_count": limit,
+        "realized_count": int(len(records)),
+        "criterion": "lowest SHA-256(seed, partition filename, row ordinal) scores",
+        "seed": int(seed),
+        "selected_query_ids": [r[1] for r in records],
+    }
+    return result, metadata
 
 
 def create_optimized_dataloader(

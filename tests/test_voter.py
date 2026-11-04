@@ -191,18 +191,15 @@ class TestVoterAndLongSequenceAudit(unittest.TestCase):
     # --- S3: Training Genome Overlap, Error Stratification, and Audit Report (C10 - C13) ---
 
     def test_audit_report_scientific_claims_and_evidence(self):
-        """C10: docs/long_sequence_inference_audit.md documents causes of ConvNeXt drop and ResNet reference overlap."""
+        """C10: long audit preserves historical values while distinguishing hypotheses from empirical evidence."""
         report_path = PROJECT_ROOT / "docs" / "long_sequence_inference_audit.md"
         self.assertTrue(report_path.exists(), "docs/long_sequence_inference_audit.md must exist")
         text = report_path.read_text(encoding="utf-8")
-
-        self.assertIn("72,69%", text, "Must cite ResNet50 72.69% accuracy")
-        self.assertIn("calculate_n_reads", text, "Must document read simulation bias function")
-        self.assertIn("500", text, "Must cite 500 reads for giant genomes")
-        self.assertIn("50", text, "Must cite 50 reads for small genomes")
-        self.assertIn("Bracoviriform", text, "Must identify dominant false-positive class")
-        self.assertIn("Pandoravirus", text, "Must identify giant virus false-positive")
-        self.assertIn("generalização", text.lower(), "Must address generalization limitation")
+        self.assertIn("72,69%", text, "Historical value remains explicitly identified")
+        self.assertIn("50/200/500", text, "Historical sampling rule is distinguished from observed composition")
+        self.assertIn("INCONCLUSIVE", text)
+        self.assertIn("unknown", text.lower(), "Missing genome identity must remain unknown")
+        self.assertIn("não demonstra generalização", text.lower())
 
     def test_quantify_training_overlap_kmers_and_exact_match(self):
         """C11: quantify_training_overlap computes exact matches and canonical k-mer sharing."""

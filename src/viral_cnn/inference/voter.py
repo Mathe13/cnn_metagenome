@@ -32,6 +32,11 @@ class LongConsensusResult:
     top5_mean_probs: list[float]
     window_top5_indices: list[list[int]]
     window_top5_probs: list[list[float]]
+    window_logits: Optional[list[list[float]]]
+    window_margins: list[float]
+    mean_abs_logit: float
+    max_abs_logit: float
+    mean_margin: float
 
 
 def slice_sequence(
@@ -75,6 +80,7 @@ def slice_sequence(
 def aggregate_window_logits(
     logits: torch.Tensor,
     tie_break: Literal["min_index"] = "min_index",
+    include_window_logits: bool = False,
 ) -> LongConsensusResult:
     """
     Aggregates window-level model logits into sequence-level consensus predictions.
@@ -104,6 +110,7 @@ def aggregate_window_logits(
     # 3. Window-level top-5 probabilities and indices
     window_probs = F.softmax(logits, dim=1)
     top5_probs, top5_indices = torch.topk(window_probs, k=k, dim=1)
+    margins = logits.topk(2, dim=1).values[:, 0] - logits.topk(2, dim=1).values[:, 1] if num_classes > 1 else torch.zeros(num_windows)
 
     return LongConsensusResult(
         pred_mean_logits=pred_mean_logits,
@@ -113,6 +120,11 @@ def aggregate_window_logits(
         top5_mean_probs=top5_mean_val.tolist(),
         window_top5_indices=top5_indices.cpu().tolist(),
         window_top5_probs=top5_probs.cpu().tolist(),
+        window_logits=logits.detach().cpu().float().tolist() if include_window_logits else None,
+        window_margins=margins.abs().tolist(),
+        mean_abs_logit=float(logits.abs().mean()),
+        max_abs_logit=float(logits.abs().max()),
+        mean_margin=float(margins.mean()),
     )
 
 
@@ -161,7 +173,7 @@ class LongSequenceVoter:
                 f"expected class count ({expected_classes})."
             )
 
-    def predict_sequence(self, sequence: str) -> Optional[LongConsensusResult]:
+    def predict_sequence(self, sequence: str, *, include_window_logits: bool = False) -> Optional[LongConsensusResult]:
         """
         Performs sliding-window inference and consensus aggregation for a single sequence.
         Returns None if sequence produces no windows (under handle_short='skip').
@@ -188,5 +200,5 @@ class LongSequenceVoter:
                 all_logits.append(logits.cpu())
 
         full_logits = torch.cat(all_logits, dim=0)
-        return aggregate_window_logits(full_logits)
+        return aggregate_window_logits(full_logits, include_window_logits=include_window_logits)
 
