@@ -31,9 +31,9 @@
 
 ## Handoff
 **Feature**: c07-latent-batches-ram-spill
-**Where**: C1–C9 implementados; avaliações da sonda e extração em lotes, orçamento RAM padrão de 30% da memória disponível e spill temporário.
-**In progress**: verificação independente do diff e gate `validate_verification.py`.
-**Next step**: confirmar o relatório do verifier e fechar a feature; validar empiricamente no cluster quando dados/checkpoints estiverem disponíveis.
-**Blockers**: servidor remoto, dados e checkpoints não estão disponíveis nesta sessão; reprodução científica integral pendente.
-**Uncommitted**: implementação C07, testes, notebook 06 e documentação da feature.
+**Where**: C1–C9 implementados; avaliação/extração em lotes, orçamento RAM padrão de 30% e spill; verificação independente PASS (gate com 0 erros).
+**In progress**: validação empírica remota ainda não executada.
+**Next step**: rodar notebook 06 no cluster com dados e checkpoints canônicos; comparar métricas e comportamento de memória antes de afirmar reprodução científica.
+**Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
+**Uncommitted**: nenhum arquivo C07; artefatos locais preexistentes permanecem preservados.
 **Branch**: main

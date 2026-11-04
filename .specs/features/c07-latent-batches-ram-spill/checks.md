@@ -72,4 +72,4 @@ Claims: C1–C9 correspondem aos critérios 1–19 do plano; C1 cobre 13, C2 cob
 - **Files in play**: 6 (`src/viral_cnn/eval/latent.py`, `notebooks/reproduction/short/06_ictv_latent_space_and_hierarchy.ipynb`, `tests/test_c01_latent_audit.py`, `tests/test_c07_latent_memory.py`, `plan.md`, este `checks.md`); handoff operacional em `.specs/STATE.md`.
 - **Estimated load**: 6 arquivos × ~5k tokens + provas/testes × ~7k + ~25k implementação/revisão = ~62k tokens < 150k -> **single builder pass**.
 - **Mechanism**: single builder; a estimativa fica abaixo do orçamento do perfil `light`.
-- **Completion**: C1–C9 implementados; provas focadas e smoke sintético do notebook passaram. Verificação independente pendente após o commit.
+- **Completion**: C1–C9 implementados; provas sintéticas passaram e a verificação independente concluiu PASS na rodada 2; validação empírica remota permanece pendente.
