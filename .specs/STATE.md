@@ -32,8 +32,8 @@
 
 **Feature**: c05-finetune-e-comparacao-controlada
 **Where**: fine-tuning mínimo C05 com entradas identificadas, namespaces exclusivos, checkpoints atômicos/retomáveis e avaliação pós-seleção; comparação pareada S4 não ativada.
-**In progress**: contratos sintéticos locais e revisão independente pendentes; execução empírica C05 ainda não realizada.
-**Next step**: concluir verificações e, quando cluster/checkpoints estiverem disponíveis, executar notebooks 03/04 com manifestos C05; S4 requer ativação e orçamento completo explícitos.
-**Blockers**: `/home/mlima/workspace` e checkpoints Species canônicos não estão disponíveis localmente; nenhum resultado real foi produzido/reproduzido; `.git` é somente leitura no sandbox.
-**Uncommitted**: alterações e saídas locais preexistentes C02/C03/C04 preservadas; arquivos gerados por smoke permanecem identificados como sintéticos e não são evidência empírica.
+**In progress**: implementação S1-S3 e verificação independente concluídas; execução empírica C05 e comparação S4 não realizadas.
+**Next step**: quando dados/checkpoints canônicos estiverem disponíveis, executar os notebooks 03/04 e revisar seus manifestos; S4 requer ativação e orçamento completo explícitos.
+**Blockers**: `/home/mlima/workspace` e checkpoints Species canônicos não estão disponíveis localmente; nenhum resultado real foi produzido ou reproduzido.
+**Uncommitted**: relatório de verificação/lessons e saídas sintéticas locais; diretórios de resultados anteriores C02/C03/C04 preservados.
 **Branch**: main
