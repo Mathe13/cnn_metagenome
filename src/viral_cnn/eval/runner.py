@@ -98,6 +98,8 @@ class EvaluationResult:
     y_true_arr: Optional[np.ndarray] = None
     y_pred_arr: Optional[np.ndarray] = None
     confs_arr: Optional[np.ndarray] = None
+    top5_hit_arr: Optional[np.ndarray] = None
+    query_ids_arr: Optional[np.ndarray] = None
 
     def summary_dict(self) -> Dict[str, Any]:
         return {
@@ -323,6 +325,55 @@ def save_evaluation_artifacts(
     }
 
 
+def save_c04_query_evidence(
+    result: EvaluationResult,
+    output_path: Union[str, Path],
+    *,
+    checkpoint: str,
+    split: str,
+    rank: str,
+    num_classes: int,
+) -> Dict[str, str]:
+    """Persist compact per-query benchmark evidence and its identity manifest."""
+    if any(value is None for value in (result.y_true_arr, result.y_pred_arr, result.confs_arr,
+                                        result.top5_hit_arr, result.query_ids_arr)):
+        raise ValueError("C04 query evidence requires IDs, truth, prediction, confidence and Top-5 hit")
+    if not (len(result.y_true_arr) == len(result.y_pred_arr) == len(result.confs_arr)
+            == len(result.top5_hit_arr) == len(result.query_ids_arr)):
+        raise ValueError("C04 query evidence arrays are not aligned")
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_suffix(target.suffix + ".tmp")
+    frame = pd.DataFrame({
+        "query_id": result.query_ids_arr,
+        "truth_label": result.y_true_arr,
+        "predicted_label": result.y_pred_arr,
+        "confidence": result.confs_arr,
+        "top5_hit": result.top5_hit_arr,
+    })
+    frame.to_parquet(temp, index=False, compression="zstd")
+    os.replace(temp, target)
+    digest = hashlib.sha256()
+    with target.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    metadata = {
+        "schema_version": 1, "protocol": "c04_stratified_fragment_v1",
+        "model": result.model_name, "rank": rank, "checkpoint": checkpoint,
+        "split": split, "num_classes": num_classes,
+        "nominal_noise_rate": result.noise_rate,
+        "effective_noise_rate": result.effective_noise_rate,
+        "noise_seed": result.seed, "n": len(frame),
+        "query_identity": "parquet_partition_sha256:row_ordinal",
+        "query_ids_sha256": hashlib.sha256(result.query_ids_arr.astype(str).tobytes()).hexdigest(),
+        "evidence_sha256": digest.hexdigest(), "evidence_file": target.name,
+        "columns": list(frame.columns),
+    }
+    manifest_path = target.with_suffix(".manifest.json")
+    manifest_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return {"evidence": str(target), "manifest": str(manifest_path), "sha256": digest.hexdigest()}
+
+
 def evaluate_dataloader(
     model: torch.nn.Module,
     dataloader: Any,
@@ -360,6 +411,8 @@ def evaluate_dataloader(
     pred_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
     conf_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
     top5_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
+    top5_hit_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
+    query_id_chunks: List[np.ndarray] = []
     loss_sums_t: Dict[float, torch.Tensor] = {
         r: torch.zeros((), dtype=torch.float64, device=dev) for r in rates_to_run
     }
@@ -383,9 +436,11 @@ def evaluate_dataloader(
 
             if isinstance(batch, (list, tuple)):
                 inputs, labels = batch[0], batch[1]
+                batch_query_ids = batch[2] if len(batch) > 2 else None
             elif isinstance(batch, dict):
                 inputs = batch.get("inputs") or batch.get("sequences")
                 labels = batch.get("labels") or batch.get("label")
+                batch_query_ids = batch.get("query_ids")
             else:
                 raise ValueError(f"Unsupported batch type: {type(batch)}")
 
@@ -398,6 +453,7 @@ def evaluate_dataloader(
             batch_labels_np = labels.detach().cpu().numpy().astype(np.int32)
             label_chunks.append(batch_labels_np)
             batch_rows = int(batch_labels_np.shape[0])
+            query_id_chunks.append(np.asarray(batch_query_ids if batch_query_ids is not None else [f"missing_query_id_{total_seen + i}" for i in range(batch_rows)], dtype=str))
             total_seen += batch_rows
 
             labels_dev = labels.to(dev, non_blocking=(dev.type == "cuda")).long()
@@ -436,6 +492,7 @@ def evaluate_dataloader(
 
                 top5_matches = (topk_indices == labels_dev.unsqueeze(1)).any(dim=1)
                 top5_correct_counts_t[r] += top5_matches.sum()
+                top5_hit_chunks[r].append(top5_matches.cpu().numpy().astype(bool))
 
                 pred_chunks[r].append(topk_indices[:, 0].cpu().numpy().astype(np.int32))
                 conf_chunks[r].append(topk_probs[:, 0].cpu().numpy().astype(np.float32))
@@ -484,6 +541,7 @@ def evaluate_dataloader(
             if (store_predictions and total_seen <= 50_000 and top5_chunks[r])
             else None
         )
+        top5_hit_arr = np.concatenate(top5_hit_chunks[r], axis=0)
         pred_chunks[r].clear()
         conf_chunks[r].clear()
         top5_chunks[r].clear()
@@ -528,6 +586,8 @@ def evaluate_dataloader(
             y_true_arr=y_true_arr,
             y_pred_arr=y_pred_arr,
             confs_arr=confs_arr,
+            top5_hit_arr=top5_hit_arr,
+            query_ids_arr=np.concatenate(query_id_chunks),
         )
 
     if noise_rates is not None:

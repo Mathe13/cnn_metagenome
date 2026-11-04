@@ -25,13 +25,14 @@
 | AD-019 | A sonda linear C01 usa embeddings versionados por variante/split, treina somente em train, seleciona pela Accuracy de validation e sela/hash dos pesos antes de avaliar test; a identidade operacional é SHA-256 da partição + ordinal | Corrige a origem falsa da sonda sem alterar backbone, pesos, classes ou split publicado; caches históricos sem proveniência permanecem preservados e recusados pelo fluxo auditado. Sem IDs genômicos, independência por genoma permanece `unknown`. | active | 2026-11-03 |
 | AD-020 | Limite de evidência da inferência long-sequence: comparação empírica só com cinco variantes, mesmo conjunto identificado e mapeamento Species verificável; identidade genômica sem accession é `unknown`; diagnósticos não estabelecem causa. Preserva 512/256, mean logits, vote e pad/skip. | Supersede a interpretação causal/de genoma visto do AD-010 sem apagar seu registro; smoke fixtures não sustentam achados empíricos, e outputs C02 exigem namespaces/manifests identificados. | active | 2026-11-03 |
 | AD-021 | Baseline short pareado C03 exige queries materializadas comuns por taxa, ruído uniforme com reposição incluindo a base original, overlap forward/RC e manifesto COMPLETE por método-condição; smoke e históricos com substituição obrigatória não são evidência C03. | Identidade de IDs isolada não comprova igualdade de sequência, ordem de classes, referência ou execução concluída; saída sem accession mantém identidade genômica `unknown`. | active | 2026-11-03 |
+| AD-022 | C04 estima ICs por bootstrap estratificado de fragmentos com suporte fixo por táxon; Macro-F1 inclui todas as classes declaradas. Temperatura limpa é ajustada na validação identificada, selada antes do teste, e bins/figuras comparativas preservam suporte antes/depois. | Incerteza é condicional à população observada e não mede variabilidade de treino ou genomas independentes; smoke não pode ser admitido como evidência empírica. | active | 2026-11-03 |
 
 ## Handoff
 
-**Feature**: c03-baselines-pareados-artefatos-reais
-**Where**: Implementação local em andamento; C03 adicionou overlap forward/RC, preparação determinística opt-in, manifests estritos e namespace para o notebook 09.
-**In progress**: validar contratos locais, revisar compatibilidade dos artefatos antigos e documentar requisitos empíricos ainda ausentes.
-**Next step**: no ambiente remoto, executar inventário C03, exportação e classificação somente após validar partições, taxonomia, ferramentas e cinco checkpoints Species.
-**Blockers**: `/home/mlima/workspace`, checkpoints Species, executáveis e bases não estavam disponíveis nesta sessão; nenhum resultado real foi produzido nem reproduzido.
-**Uncommitted**: alterações C02 locais; o sandbox apresenta `.git` como somente leitura.
+**Feature**: c04-incerteza-calibracao-e-figuras
+**Where**: bootstrap compacto por fragmento, scaler selável com proveniência, bins comparativos e integração C04 nos notebooks 01/02.
+**In progress**: executar contratos locais e revisar a estrutura notebook; execução JupyterHub empírica ainda pendente.
+**Next step**: executar notebooks 01/02 remotamente com datasets Species/Genus e checkpoints identificados; reconciliar as 35 condições benchmark e 25 painéis calibrados.
+**Blockers**: `/home/mlima/workspace` e checkpoints Species não estavam disponíveis localmente; nenhum resultado real foi produzido ou reproduzido.
+**Uncommitted**: alterações locais preexistentes C02/C03 preservadas e não atribuídas a C04; o sandbox apresenta `.git` como somente leitura.
 **Branch**: main
