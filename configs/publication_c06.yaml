@@ -9,6 +9,7 @@ historical_source:
   paper_directory_snapshot: paper
 identity_template: &unselected_scientific_identity
   dataset_sha256: ""
+  population_id: ""
   split_id: ""
   seed: ""
   taxonomy_version: ""

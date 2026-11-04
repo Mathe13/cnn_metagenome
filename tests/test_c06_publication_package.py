@@ -58,7 +58,8 @@ class C06Fixture(unittest.TestCase):
             panel_checkpoints[variant] = sha256_file(path)
             panel_checkpoint_records.append({"variant": variant, "path": str(path), "sha256": panel_checkpoints[variant]})
         self.identity = {
-            "dataset_sha256": sha256_file(dataset), "split_id": "fixture-split", "seed": 42,
+            "dataset_sha256": sha256_file(dataset), "population_id": "fixture-population-v1",
+            "split_id": "fixture-split", "seed": 42,
             "taxonomy_version": "taxonomy-fixture-v1", "class_order_sha256": sha256_file(class_order),
             "checkpoint_sha256s": {"fixture_model": sha256_file(checkpoint)},
             "model_variants": ["fixture_model"], "noise_conditions": [0.0],
@@ -166,6 +167,7 @@ class TestEvidenceSelection(C06Fixture):
             ("T3", {"is_smoke_test": False}, "manifest unreadable"),
             ("T4", {"is_smoke_test": None}, "is_smoke_test=false"),
             ("T5", {"protocol": "wrong-protocol"}, "protocol mismatch"),
+            ("T8", {"evidence_kind": None}, "evidence_kind must be empirical or structural"),
         ):
             item = next(item for item in self.items if item["item_id"] == item_id)
             path = Path(item["manifest"])
@@ -180,6 +182,16 @@ class TestEvidenceSelection(C06Fixture):
             self.assertIn(item_id, row["diagnostic"])
             self.assertIn(str(path), row["diagnostic"])
             self.assertIn(expected, row["diagnostic"])
+        artifact_item = next(item for item in self.items if item["item_id"] == "T9")
+        Path(artifact_item["artifact"]).write_bytes(b"\xff\xfe")
+        artifact_item["sha256"] = sha256_file(Path(artifact_item["artifact"]))
+        self.rewrite_manifest("T9", artifact_sha256=artifact_item["sha256"])
+        self.write_config()
+        unreadable = next(row for row in validate_selection(load_publication_config(self.config_path), strict_empirical=False)
+                          if row["item_id"] == "T9")
+        self.assertEqual(unreadable["status"], "INVALID")
+        self.assertIn("artifact unreadable", unreadable["diagnostic"])
+        self.assertIn(str(artifact_item["artifact"]), unreadable["diagnostic"])
 
     def test_scientific_identity_and_composition_must_match(self):
         self.items[0]["expected"]["scientific_identity"]["class_order_sha256"] = "expected-order"
@@ -190,7 +202,7 @@ class TestEvidenceSelection(C06Fixture):
         row = validate_selection(load_publication_config(self.config_path), strict_empirical=False)[0]
         self.assertIn("class_order_sha256", row["diagnostic"])
         mismatch_cases = {
-            "dataset_sha256": "different-dataset", "split_id": "different-split",
+            "dataset_sha256": "different-dataset", "population_id": "different-population", "split_id": "different-split",
             "seed": 7, "noise_conditions": [0.02, 0.05],
             "model_variants": ["different_model"],
             "checkpoint_sha256s": {"fixture_model": "different-checkpoint"},
@@ -226,6 +238,14 @@ class TestEvidenceSelection(C06Fixture):
             self.write_config()
             with self.subTest(item_id=item_id), self.assertRaisesRegex(PublicationValidationError, item_id):
                 validate_selection(load_publication_config(self.config_path), strict_empirical=True)
+        child = self.root / "evidence" / "strict-transitive.json"
+        child.write_text(json.dumps({"is_smoke_test": True}), encoding="utf-8")
+        t7, _ = self.rewrite_manifest("T7")
+        t7["inputs"].append({"path": str(child), "sha256": sha256_file(child)})
+        Path(next(item for item in self.items if item["item_id"] == "T7")["manifest"]).write_text(json.dumps(t7), encoding="utf-8")
+        self.write_config()
+        with self.assertRaisesRegex(PublicationValidationError, "synthetic dependency"):
+            validate_selection(load_publication_config(self.config_path), strict_empirical=True)
 
     def test_table_11_requires_architecture_correlation_semantics(self):
         item = next(item for item in self.items if item["item_id"] == "T11")
@@ -249,6 +269,10 @@ class TestEvidenceSelection(C06Fixture):
         rows = validate_selection(self.config, strict_empirical=False)
         self.assertEqual(rows[0]["status"], "SYNTHETIC")
         self.assertIn("synthetic dependency", rows[0]["diagnostic"])
+        blocked = assemble_publication(self.config_path, self.root / "transitive-blocked", strict_empirical=True)
+        self.assertEqual(blocked["status"], "BLOCKED")
+        self.assertEqual(blocked["gates"]["empirical"], "BLOCKED")
+        self.assertTrue((self.root / "transitive-blocked" / "evidence_matrix.csv").is_file())
 
     def test_partial_selection_is_diagnostic_and_never_complete(self):
         self.items[2]["artifact"] = ""
@@ -316,7 +340,8 @@ class TestPublicationTables(C06Fixture):
     def test_metrics_preserve_estimands_support_and_protocol_strata(self):
         self.rewrite_manifest("T3", estimand="top1_accuracy", metric_unit="percent",
                               unsupported_class_rule="include all declared classes; zero score without predictions",
-                              protocol_stratum="fixture-protocol")
+                              protocol_stratum="fixture-protocol", ci_population="fixture CI queries",
+                              calibration_population="fixture calibration validation split")
         rows = validate_selection(self.config)
         matrix = evidence_matrix(self.config, rows)
         self.assertEqual(matrix.loc[matrix.item_id == "T3", "n"].iloc[0], 10)
@@ -329,6 +354,8 @@ class TestPublicationTables(C06Fixture):
         self.assertEqual(manifest["metric_unit"], "percent")
         self.assertEqual(manifest["unsupported_class_rule"], "include all declared classes; zero score without predictions")
         self.assertEqual(manifest["protocol_stratum"], "fixture-protocol")
+        self.assertEqual(manifest["ci_population"], "fixture CI queries")
+        self.assertEqual(manifest["calibration_population"], "fixture calibration validation split")
 
     def test_discrepancies_use_compatible_units_and_keep_full_precision(self):
         pp = reconcile_value(84.881, 84.88, observed_unit="%", historical_unit="%",
@@ -344,14 +371,21 @@ class TestPublicationTables(C06Fixture):
 class TestPublicationFigures(C06Fixture):
     def test_figures_render_from_validated_inputs_without_fallbacks(self):
         outputs = render_figures(self.config, self.root / "figures", validate_selection(self.config))
-        self.assertEqual({key for key in outputs if not key.startswith("F3:panel_")}, {f"F{i}" for i in range(1, 6)})
+        self.assertEqual({key for key in outputs if key.startswith("F") and not key.startswith("F3:panel_")},
+                         {f"F{i}" for i in range(1, 6)})
         self.assertEqual(sum(key.startswith("F3:panel_") for key in outputs), 5)
+        rendered = json.loads(outputs["figure_render_manifest"].read_text(encoding="utf-8"))
         for item_id in (f"F{i}" for i in range(1, 6)):
             png = outputs[item_id]
             self.assertTrue(png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertTrue(png.with_suffix(".pdf").read_bytes().startswith(b"%PDF-"))
             item = next(item for item in self.config["items"] if item["item_id"] == item_id)
             self.assertTrue(item["plot"], f"{item_id} render parameters must be selected in config")
+            provenance = rendered["rendered_figures"][item_id]
+            self.assertEqual(provenance["render_source"], "selected_artifact")
+            self.assertEqual(provenance["source_path"], item["artifact"])
+            self.assertEqual(provenance["source_sha256"], item["sha256"])
+            self.assertEqual(provenance["plot_parameters"], item["plot"])
 
     def test_figure_3_panel_identity_uses_variant_provenance(self):
         item = next(item for item in self.items if item["item_id"] == "F3")
@@ -440,11 +474,15 @@ class TestPublicationManuscript(C06Fixture):
         )
 
     def test_methods_and_results_follow_observed_protocols(self):
+        self.rewrite_manifest("T3", ci_population="fixture CI queries",
+                              calibration_population="fixture calibration validation split")
         paths = render_manuscript_variants(self.config, self.root)
         content = paths["submission"].read_text(encoding="utf-8")
         for phrase in ("closed-set", "not a genome-disjoint test", r"3\epsilon/4", "cosine distance", "UMAP is used only",
                        "Triplet composition summaries are exploratory", "confidence-interval/calibration populations"):
-            self.assertIn(phrase, content)
+            self.assertIn(phrase.lower(), content.lower())
+        for selected in ("fixture_model=", "fixture CI queries", "fixture calibration validation split"):
+            self.assertIn(selected, content)
 
     def test_inconclusive_evidence_limits_genome_and_causal_claims(self):
         content = render_manuscript_variants(self.config, self.root)["submission"].read_text(encoding="utf-8")
@@ -464,6 +502,22 @@ class TestPublicationManuscript(C06Fixture):
         content = render_manuscript_variants(config, self.root)["review"].read_text(encoding="utf-8")
         self.assertIn("C05 scratch comparison is NOT_RUN", content)
         self.assertTrue(all(row["status"] == "EMPIRICAL_VERIFIED" for row in validate_selection(self.config)))
+        out = self.root / "c05-not-run-package"
+        real_run = subprocess.run
+        def fake_run(command, **kwargs):
+            if Path(command[0]).name != "pdflatex":
+                return real_run(command, **kwargs)
+            out_arg = next(arg.split("=", 1)[1] for arg in command if arg.startswith("-output-directory="))
+            stem = Path(command[-1]).stem
+            Path(out_arg, f"{stem}.pdf").write_bytes(b"%PDF-fixture")
+            return type("Result", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+        with patch("viral_cnn.reporting.publication._git_state", return_value=("fixture-commit", True)), \
+             patch("viral_cnn.reporting.publication.subprocess.run", side_effect=fake_run):
+            result = assemble_publication(self.config_path, out, strict_empirical=True, command="fixture assembly")
+        self.assertEqual(result["status"], "ASSEMBLED_REVIEW_REQUIRED")
+        self.assertEqual(result["gates"]["empirical"], "PASS")
+        self.assertIn("C05 scratch comparison is NOT_RUN",
+                      (out / "manuscript_submission.tex").read_text(encoding="utf-8"))
 
     def test_historical_values_remain_unreproduced_and_noncomplete(self):
         matrix = evidence_matrix(self.config, validate_selection(self.config))
@@ -519,6 +573,8 @@ class TestPackageIsolation(C06Fixture):
         self.assertNotIn("requests.get", source.lower())
         self.assertNotIn("urlopen(", source.lower())
         self.assertNotIn("train(", source)
+        self.assertIn("reserve_run_directory", source)
+        self.assertIn("assemble_publication", source)
 
     def test_compile_artifacts_are_isolated_and_historical_sources_unchanged(self):
         from viral_cnn.reporting.publication import validate_manuscript_paths
@@ -641,7 +697,8 @@ class TestPublicationManifest(C06Fixture):
         self.rewrite_manifest("T1", is_smoke_test=True)
         self.write_config()
         out = self.root / "diagnostic-run"
-        result = assemble_publication(self.config_path, out, strict_empirical=False, diagnostic_only=True)
+        result = assemble_publication(self.config_path, out, strict_empirical=False, diagnostic_only=True,
+                                      command="python scripts/assemble_publication.py --mode diagnostic --run-id fixture")
         self.assertEqual(result["status"], "DIAGNOSTIC")
         matrix = pd.read_csv(result["matrix"])
         self.assertEqual(matrix.loc[matrix.item_id == "T1", "status"].iloc[0], "SYNTHETIC")
@@ -653,6 +710,16 @@ class TestPublicationManifest(C06Fixture):
         self.assertIn("evidence_matrix", manifest["outputs"])
         self.assertEqual(len(manifest["inputs"]), 17)
         self.assertTrue(any(row["diagnostic"] for row in manifest["inputs"]))
+        self.assertTrue(all("manifest_sha256" in row for row in manifest["inputs"]))
+        self.assertTrue(all("source_inputs" in row for row in manifest["inputs"]))
+        self.assertTrue(any(all("sha256" in item for item in row["source_inputs"])
+                            for row in manifest["inputs"] if row["source_inputs"]))
+        status = Path(result["outputs"]["publication_status_report"]).read_text(encoding="utf-8")
+        self.assertIn("synthetic", status.lower())
+        self.assertIn("--mode diagnostic", status)
+        self.assertIn(str(result["manifest"]), status)
+        self.assertIn("Numeric discrepancies were not computed", status)
+        self.assertIn("does not reproduce the article", status)
         self.assertNotIn("tables", result.get("outputs", {}))
 
 

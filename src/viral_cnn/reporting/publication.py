@@ -31,7 +31,7 @@ EVIDENCE_STATUSES = {
     "SYNTHETIC", "MISSING", "INVALID",
 }
 SCIENTIFIC_IDENTITY_FIELDS = (
-    "dataset_sha256", "split_id", "seed", "taxonomy_version", "class_order_sha256",
+    "dataset_sha256", "population_id", "split_id", "seed", "taxonomy_version", "class_order_sha256",
     "checkpoint_sha256s", "model_variants", "noise_conditions", "metric_definition",
 )
 
@@ -178,7 +178,8 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
             "item_id": iid, "artifact": str(artifact) if artifact else "",
             "manifest": str(manifest) if manifest else "", "protocol": item.get("protocol"),
             "transformation": item.get("transformation"), "n": None,
-            "support": item.get("expected", {}).get("support"), "status": "MISSING",
+            "support": item.get("expected", {}).get("support"), "source_inputs": [],
+            "checkpoints": [], "status": "MISSING",
             "diagnostic": "", "sha256": "", "n_not_applicable_reason": "",
         }
         try:
@@ -194,6 +195,7 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
             if item.get("sha256") != actual_hash:
                 raise PublicationValidationError(f"{iid}: sha256 mismatch for {artifact}")
             declared = _read_manifest(manifest)
+            row["manifest_sha256"] = sha256_file(manifest)
             if declared.get("is_smoke_test") is True or declared.get("synthetic") is True:
                 row["status"] = "SYNTHETIC"
                 raise PublicationValidationError(f"{iid}: selected manifest declares synthetic evidence")
@@ -212,6 +214,8 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
             synthetic = bool(declared.get("is_smoke_test", declared.get("synthetic", False)))
             verified_input_hashes: set[str] = set()
             all_inputs = [*declared_inputs, *({"path": p} for p in dependency_paths)]
+            row["source_inputs"] = all_inputs
+            row["checkpoints"] = declared.get("checkpoints", [])
             for input_record in all_inputs:
                 if not isinstance(input_record, dict) or not input_record.get("path"):
                     raise PublicationValidationError(f"{iid}: each source input must declare path and sha256")
@@ -230,7 +234,7 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
             if declared.get("status") != "COMPLETE":
                 raise PublicationValidationError(f"{iid}: manifest status must be COMPLETE")
             if declared.get("evidence_kind") not in {"empirical", "structural"}:
-                raise PublicationValidationError(f"{iid}: evidence_kind must be empirical or structural")
+                raise PublicationValidationError(f"{iid}: manifest {manifest}: evidence_kind must be empirical or structural")
             if declared.get("evidence_kind") == "structural":
                 derivation = declared.get("derivation")
                 if not isinstance(derivation, dict) or not {"source", "config"}.issubset(derivation):
@@ -320,7 +324,10 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 expected_columns = item.get("expected", {}).get("columns", [])
                 if not expected_columns:
                     raise PublicationValidationError(f"{iid}: expected table columns are not selected")
-                table_frame = _load_table_artifact(artifact)
+                try:
+                    table_frame = _load_table_artifact(artifact)
+                except Exception as exc:
+                    raise PublicationValidationError(f"{iid}: artifact unreadable at {artifact}: {exc}") from exc
                 if not set(expected_columns).issubset(table_frame.columns):
                     raise PublicationValidationError(f"{iid}: artifact columns do not satisfy {expected_columns}")
             if synthetic:
@@ -395,6 +402,8 @@ def render_tables(config: dict[str, Any], output_dir: Path, rows: list[dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {row["item_id"]: row for row in rows}
     outputs: dict[str, Path] = {}
+    rendered_sources: dict[str, dict[str, Any]] = {}
+    rendered_sources: dict[str, Any] = {}
     reconciliation: list[dict[str, Any]] = []
     for item in config["items"]:
         if not item["item_id"].startswith("T"):
@@ -450,6 +459,7 @@ def render_figures(config: dict[str, Any], output_dir: Path, rows: list[dict[str
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {row["item_id"]: row for row in rows}
     outputs: dict[str, Path] = {}
+    rendered_sources: dict[str, Any] = {}
     for item in config["items"]:
         if not item["item_id"].startswith("F"):
             continue
@@ -463,6 +473,10 @@ def render_figures(config: dict[str, Any], output_dir: Path, rows: list[dict[str
         if kind != "network_edges" and (x_col not in frame.columns or y_col not in frame.columns):
             raise PublicationValidationError(f"{item['item_id']}: figure x/y columns absent: {x_col}, {y_col}")
         plot = item.get("plot", {})
+        rendered_sources[item["item_id"]] = {
+            "render_source": "selected_artifact", "source_path": str(source),
+            "source_sha256": sha256_path(source), "plot_parameters": plot,
+        }
         if kind == "panel_grid":
             if not {"panel", "variant", x_col, y_col}.issubset(frame.columns):
                 raise PublicationValidationError(f"{item['item_id']}: panel grid requires panel, variant, x and y columns")
@@ -521,6 +535,12 @@ def render_figures(config: dict[str, Any], output_dir: Path, rows: list[dict[str
         if not base.with_suffix(".pdf").read_bytes().startswith(b"%PDF-"):
             raise PublicationValidationError(f"{item['item_id']}: rendered PDF is invalid")
         outputs[item["item_id"]] = base.with_suffix(".png")
+    manifest_path = output_dir / "figure_render_manifest.json"
+    manifest_path.write_text(json.dumps({
+        "publication_protocol": PUBLICATION_PROTOCOL,
+        "rendered_figures": rendered_sources,
+    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    outputs["figure_render_manifest"] = manifest_path
     return outputs
 
 
@@ -571,6 +591,31 @@ def render_manuscript_variants(config: dict[str, Any], output_dir: Path) -> dict
     output_dir.mkdir(parents=True, exist_ok=True)
     generated: dict[str, Path] = {}
     tabular = re.compile(r"\\begin\{tabular\}.*?\\end\{tabular\}", re.DOTALL)
+    selected_variant_hashes: dict[str, str] = {}
+    selected_figure_selections: list[str] = []
+    interval_calibration_populations: list[str] = []
+    for item in config["items"]:
+        manifest_path = _resolve(root, str(item["manifest"])) if item.get("manifest") else None
+        if not manifest_path or not manifest_path.is_file():
+            continue
+        selected_manifest = _read_manifest(manifest_path)
+        identity = selected_manifest.get("scientific_identity", {})
+        checkpoint_hashes = identity.get("checkpoint_sha256s", {})
+        if isinstance(checkpoint_hashes, dict):
+            selected_variant_hashes.update({str(k): str(v) for k, v in checkpoint_hashes.items()})
+        for variant in selected_manifest.get("panel_variants", {}).values():
+            selected_variant_hashes.setdefault(str(variant), str(checkpoint_hashes.get(variant, "not selected")))
+        selection = selected_manifest.get("selection")
+        if selection:
+            selected_figure_selections.append(
+                f"{item['item_id']}: IDs={selection.get('ids')}; levels={selection.get('levels')}; "
+                f"sampling={selection.get('sampling')}; seed={selection.get('seed')}; filters={selection.get('filters')}"
+            )
+        if selected_manifest.get("ci_population") or selected_manifest.get("calibration_population"):
+            interval_calibration_populations.append(
+                f"{item['item_id']}: CI={selected_manifest.get('ci_population', 'not reported')}; "
+                f"calibration={selected_manifest.get('calibration_population', 'not reported')}"
+            )
     for mode, key in (("review", "manuscript_review"), ("submission", "manuscript_submission")):
         source = _resolve(root, str(history.get(key, ""))) if history.get(key) else None
         if not source or not source.is_file():
@@ -619,9 +664,12 @@ def render_manuscript_variants(config: dict[str, Any], output_dir: Path) -> dict
             "not model insertions, deletions or context-dependent sequencing errors. Embedding KNN uses the "
             "declared high-dimensional representation, $k=5$, $L_2$ normalization and cosine distance; UMAP is "
             "used only for visualization. Triplet composition summaries are exploratory and do not establish "
-            "codon use in annotated coding frames. Selected variants, noise conditions, figure selections, and "
-            "confidence-interval/calibration populations are recorded in their manifests; no unreported population "
-            "is inferred. Long-sequence windowing, aggregation and metric denominators are taken "
+            "codon use in annotated coding frames. Observed model/checkpoint selection: "
+            + ("; ".join(f"{k}={v}" for k, v in sorted(selected_variant_hashes.items())) or "not identified") + ".\n"
+            "Figure selections: " + ("; ".join(selected_figure_selections) or "not reported") + ".\n"
+            "Confidence-interval/calibration populations: "
+            + ("; ".join(interval_calibration_populations) or "not reported by selected manifests") + ".\n"
+            "Long-sequence windowing, aggregation and metric denominators are taken "
             "from the selected manifests and are reported separately from fragment evaluation.\n\n"
             f"The controlled C05 scratch comparison is {config.get('c05_status', 'NOT_RUN')}; where it is not complete, "
             "claims remain limited to the configurations with complete evidence.\n\n"
@@ -756,6 +804,35 @@ def _git_state(project_root: Path) -> tuple[str, bool]:
         return "unavailable", True
 
 
+def write_publication_status_report(
+    output_dir: Path, rows: list[dict[str, Any]], outputs: dict[str, Path], *,
+    command: str, interface: str, gate_states: dict[str, str], manifest_path: Path,
+) -> Path:
+    """Write a concise report separating diagnostics from reproduction claims."""
+    missing = [row for row in rows if row["status"] not in {"EMPIRICAL_VERIFIED", "DERIVED_VERIFIED"}]
+    reconciliation = outputs.get("reconciliation:csv")
+    if reconciliation and Path(reconciliation).is_file():
+        discrepancy_summary = f"Reconciliation rows: {len(pd.read_csv(reconciliation))}."
+    else:
+        discrepancy_summary = "Numeric discrepancies were not computed because required evidence was unavailable."
+    lines = [
+        "# C06 publication assembly status", "",
+        f"- Interface: {interface}", f"- Command: `{command or '<not supplied>'}`",
+        f"- Manifest: `{manifest_path}`", f"- Gates: `{json.dumps(gate_states, sort_keys=True)}`", "",
+        "## Outputs", "",
+        *[f"- `{key}`: `{path}`" for key, path in sorted(outputs.items())], "",
+        "## Unavailable or inadmissible selected dependencies", "",
+        *([f"- {row['item_id']} [{row['status']}]: {row['diagnostic']}" for row in missing]
+          or ["- None; all selected evidence rows passed local admissibility."]), "",
+        "## Discrepancies", "", discrepancy_summary, "",
+        "This report distinguishes local assembly from empirical reproduction and editorial readiness. "
+        "A diagnostic or synthetic run does not reproduce the article.", "",
+    ]
+    target = Path(output_dir) / "publication_status.md"
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
+
+
 def write_publication_manifest(
     config: dict[str, Any], output_dir: Path, rows: list[dict[str, Any]], outputs: dict[str, Path],
     *, command: str, interface: str, gate_states: dict[str, str],
@@ -856,6 +933,11 @@ def assemble_publication(
         gates["editorial"] = "PENDING_REVIEW"
     elif strict_empirical:
         gates["empirical"] = "BLOCKED"
+    report_path = write_publication_status_report(
+        output_dir, rows, outputs, command=command, interface=interface, gate_states=gates,
+        manifest_path=output_dir / "publication_manifest.json",
+    )
+    outputs["publication_status_report"] = report_path
     manifest_path = write_publication_manifest(
         config, output_dir, rows, outputs, command=command, interface=interface, gate_states=gates,
     )
