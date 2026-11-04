@@ -179,7 +179,7 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
             "manifest": str(manifest) if manifest else "", "protocol": item.get("protocol"),
             "transformation": item.get("transformation"), "n": None,
             "support": item.get("expected", {}).get("support"), "status": "MISSING",
-            "diagnostic": "", "sha256": "",
+            "diagnostic": "", "sha256": "", "n_not_applicable_reason": "",
         }
         try:
             if not artifact or not artifact.exists():
@@ -198,7 +198,9 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 row["status"] = "SYNTHETIC"
                 raise PublicationValidationError(f"{iid}: selected manifest declares synthetic evidence")
             if "is_smoke_test" not in declared or declared["is_smoke_test"] is not False:
-                raise PublicationValidationError(f"{iid}: manifest must explicitly declare is_smoke_test=false")
+                raise PublicationValidationError(
+                    f"{iid}: manifest must explicitly declare is_smoke_test=false at {manifest}"
+                )
             if declared.get("artifact_sha256") != actual_hash:
                 raise PublicationValidationError(f"{iid}: artifact hash in manifest does not match {artifact}")
             declared_inputs = declared.get("inputs")
@@ -229,6 +231,19 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 raise PublicationValidationError(f"{iid}: manifest status must be COMPLETE")
             if declared.get("evidence_kind") not in {"empirical", "structural"}:
                 raise PublicationValidationError(f"{iid}: evidence_kind must be empirical or structural")
+            if declared.get("evidence_kind") == "structural":
+                derivation = declared.get("derivation")
+                if not isinstance(derivation, dict) or not {"source", "config"}.issubset(derivation):
+                    raise PublicationValidationError(f"{iid}: structural evidence must identify derivation source and config")
+                for kind in ("source", "config"):
+                    record = derivation[kind]
+                    if not isinstance(record, dict) or not record.get("path") or not record.get("sha256"):
+                        raise PublicationValidationError(f"{iid}: structural derivation {kind} must record path and sha256")
+                    derivation_path = _resolve(root, str(record["path"]))
+                    if not derivation_path.is_file() or sha256_file(derivation_path) != record["sha256"]:
+                        raise PublicationValidationError(f"{iid}: structural derivation {kind} missing or hash mismatch: {derivation_path}")
+                    if record["sha256"] not in verified_input_hashes:
+                        raise PublicationValidationError(f"{iid}: structural derivation {kind} is not a hash-verified input")
             if declared.get("transformation") != item.get("transformation"):
                 raise PublicationValidationError(f"{iid}: transformation mismatch in {manifest}")
             if "seed" not in declared or "split_id" not in declared:
@@ -249,12 +264,21 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 if key == "scientific_identity":
                     if not isinstance(expected, dict):
                         raise PublicationValidationError(f"{iid}: expected scientific_identity must be an object")
+                    declared_identity = declared.get("scientific_identity")
+                    if not isinstance(declared_identity, dict):
+                        raise PublicationValidationError(f"{iid}: manifest scientific_identity must be an object at {manifest}")
                     for identity_field in SCIENTIFIC_IDENTITY_FIELDS:
                         value = expected.get(identity_field)
                         if value in (None, "", "TO_BE_SELECTED"):
                             raise PublicationValidationError(f"{iid}: scientific identity {identity_field} not selected")
-                    if expected.get("seed") != declared.get("seed") or expected.get("split_id") != declared.get("split_id"):
-                        raise PublicationValidationError(f"{iid}: selected scientific identity seed/split differs from manifest")
+                        if declared_identity.get(identity_field) != value:
+                            raise PublicationValidationError(
+                                f"{iid}: scientific identity {identity_field} mismatch in {manifest}"
+                            )
+                    if expected.get("seed") != declared.get("seed"):
+                        raise PublicationValidationError(f"{iid}: selected scientific identity seed differs from manifest")
+                    if expected.get("split_id") != declared.get("split_id"):
+                        raise PublicationValidationError(f"{iid}: selected scientific identity split_id differs from manifest")
                     for source_field in ("dataset_sha256", "class_order_sha256"):
                         source_hash = expected.get(source_field)
                         if isinstance(source_hash, str) and source_hash.lower().startswith("n/a -"):
@@ -303,6 +327,7 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 row["status"] = "SYNTHETIC"
                 raise PublicationValidationError(f"{iid}: selected evidence has synthetic dependency")
             row["n"] = declared.get("n")
+            row["n_not_applicable_reason"] = declared.get("n_not_applicable_reason", "")
             row["support"] = declared.get("support", item.get("expected", {}).get("support"))
             row["support_not_applicable_reason"] = declared.get("support_not_applicable_reason", "")
             row["denominator"] = declared.get("denominator_n", declared.get("n"))
@@ -593,7 +618,10 @@ def render_manuscript_variants(config: dict[str, Any], output_dir: Path) -> dict
             "including the original nucleotide, so the expected effective change rate is $3\\epsilon/4$; it does "
             "not model insertions, deletions or context-dependent sequencing errors. Embedding KNN uses the "
             "declared high-dimensional representation, $k=5$, $L_2$ normalization and cosine distance; UMAP is "
-            "used only for visualization. Long-sequence windowing, aggregation and metric denominators are taken "
+            "used only for visualization. Triplet composition summaries are exploratory and do not establish "
+            "codon use in annotated coding frames. Selected variants, noise conditions, figure selections, and "
+            "confidence-interval/calibration populations are recorded in their manifests; no unreported population "
+            "is inferred. Long-sequence windowing, aggregation and metric denominators are taken "
             "from the selected manifests and are reported separately from fragment evaluation.\n\n"
             f"The controlled C05 scratch comparison is {config.get('c05_status', 'NOT_RUN')}; where it is not complete, "
             "claims remain limited to the configurations with complete evidence.\n\n"
@@ -628,13 +656,19 @@ def render_manuscript_variants(config: dict[str, Any], output_dir: Path) -> dict
             r"\section{Conclusions}" + "\n"
             "The C06 package reports only results supported by selected, traceable evidence. Historical values "
             "and unresolved scientific or editorial questions remain separately identified. This package does "
-            "not claim full empirical reproduction unless all required evidence gates pass.\n\n"
+            "not establish performance on unseen genomes or a causal explanation for long-sequence changes. "
+            "It does not claim full empirical reproduction unless all required evidence gates pass.\n\n"
         )
         content = content[:conclusion_start] + conclusion + content[availability_start:]
         # Keep the review/submission note distinction while making stale abstract results non-numeric.
         content = re.sub(
             r"(\\textbf\{Results\}:).*?(?=\\par\\vspace\{0\.5em\}\\noindent\\textbf\{Conclusions\}:)",
             r"\1 Results and figures are derived from the selected evidence package; gaps and historical discrepancies are listed in its evidence matrix.\n\n",
+            content, count=1, flags=re.DOTALL,
+        )
+        content = re.sub(
+            r"(\\textbf\{Conclusions\}:).*?(?=\\end\{abstract\})",
+            r"\1 Fragment-level evaluation does not establish performance on unseen genomes; unresolved mechanisms are not demonstrated causes.\n\n",
             content, count=1, flags=re.DOTALL,
         )
         if mode == "review" and review_notes:

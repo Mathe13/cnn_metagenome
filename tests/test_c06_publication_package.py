@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -110,6 +112,9 @@ class C06Fixture(unittest.TestCase):
             plot = {"x": "x", "y": "y", "title": item_id}
             if item_id == "F2":
                 plot["kind"] = "scatter"
+                plot["interpretation"] = "qualitative visualization only"
+            if item_id == "F4":
+                plot["interpretation"] = "exploratory triplet composition"
             if item_id == "F3":
                 plot["kind"] = "panel_grid"
             if item_id == "F5":
@@ -157,6 +162,24 @@ class TestEvidenceSelection(C06Fixture):
         self.assertIn("sha256 mismatch", rows[1]["diagnostic"])
         self.assertEqual(rows[0]["status"], "MISSING")
         self.assertEqual(rows[1]["status"], "INVALID")
+        for item_id, update, expected in (
+            ("T3", {"is_smoke_test": False}, "manifest unreadable"),
+            ("T4", {"is_smoke_test": None}, "is_smoke_test=false"),
+            ("T5", {"protocol": "wrong-protocol"}, "protocol mismatch"),
+        ):
+            item = next(item for item in self.items if item["item_id"] == item_id)
+            path = Path(item["manifest"])
+            if item_id == "T3":
+                path.write_text("{invalid json", encoding="utf-8")
+            else:
+                self.rewrite_manifest(item_id, **update)
+            self.write_config()
+            row = next(row for row in validate_selection(load_publication_config(self.config_path), strict_empirical=False)
+                       if row["item_id"] == item_id)
+            self.assertEqual(row["status"], "INVALID")
+            self.assertIn(item_id, row["diagnostic"])
+            self.assertIn(str(path), row["diagnostic"])
+            self.assertIn(expected, row["diagnostic"])
 
     def test_scientific_identity_and_composition_must_match(self):
         self.items[0]["expected"]["scientific_identity"]["class_order_sha256"] = "expected-order"
@@ -166,12 +189,43 @@ class TestEvidenceSelection(C06Fixture):
         self.rewrite_manifest("T1", scientific_identity=identity)
         row = validate_selection(load_publication_config(self.config_path), strict_empirical=False)[0]
         self.assertIn("class_order_sha256", row["diagnostic"])
+        mismatch_cases = {
+            "dataset_sha256": "different-dataset", "split_id": "different-split",
+            "seed": 7, "noise_conditions": [0.02, 0.05],
+            "model_variants": ["different_model"],
+            "checkpoint_sha256s": {"fixture_model": "different-checkpoint"},
+        }
+        for field, expected in mismatch_cases.items():
+            item = next(item for item in self.items if item["item_id"] == "T6")
+            item["expected"]["scientific_identity"] = {**self.identity, field: expected}
+            self.write_config()
+            row = next(row for row in validate_selection(load_publication_config(self.config_path), strict_empirical=False)
+                       if row["item_id"] == "T6")
+            self.assertEqual(row["status"], "INVALID", field)
+            self.assertIn(field, row["diagnostic"], field)
+        self.items[5]["expected"]["scientific_identity"] = dict(self.identity)
 
     def test_strict_gate_fails_closed_per_required_item(self):
+        f5_artifact = self.items[-1]["artifact"]
         self.items[-1]["artifact"] = ""
         self.write_config()
         with self.assertRaisesRegex(PublicationValidationError, "F5"):
             validate_selection(load_publication_config(self.config_path), strict_empirical=True)
+        self.items[-1]["artifact"] = f5_artifact
+        invalid_cases = (
+            ("T3", {"sha256": "0" * 64}, None),
+            ("T4", {}, {"is_smoke_test": True}),
+            ("T5", {}, {"status": "PARTIAL"}),
+            ("T6", {}, {"inputs": []}),
+        )
+        for item_id, item_updates, manifest_updates in invalid_cases:
+            item = next(item for item in self.items if item["item_id"] == item_id)
+            item.update(item_updates)
+            if manifest_updates:
+                self.rewrite_manifest(item_id, **manifest_updates)
+            self.write_config()
+            with self.subTest(item_id=item_id), self.assertRaisesRegex(PublicationValidationError, item_id):
+                validate_selection(load_publication_config(self.config_path), strict_empirical=True)
 
     def test_table_11_requires_architecture_correlation_semantics(self):
         item = next(item for item in self.items if item["item_id"] == "T11")
@@ -212,6 +266,9 @@ class TestPublicationTables(C06Fixture):
     def test_tables_are_derived_and_historical_values_are_separate(self):
         outputs = render_tables(self.config, self.root / "tables", validate_selection(self.config))
         self.assertEqual(sum(key.startswith("T") and key.endswith(":csv") for key in outputs), 12)
+        self.assertEqual(sum(key.startswith("T") and key.endswith(":markdown") for key in outputs), 12)
+        self.assertEqual(sum(key.startswith("T") and key.endswith(":latex") for key in outputs), 12)
+        self.assertTrue(all(outputs[f"T{i}:markdown"].is_file() and outputs[f"T{i}:latex"].is_file() for i in range(1, 13)))
         generated = pd.read_csv(outputs["T1:csv"])
         original = pd.read_csv(Path(self.items[0]["artifact"]))
         pd.testing.assert_frame_equal(generated, original)
@@ -231,6 +288,15 @@ class TestPublicationTables(C06Fixture):
         self.rewrite_manifest("T2", artifact_sha256=t2["sha256"], evidence_kind="structural",
                               scientific_identity=structural_identity, checkpoints=[])
         self.write_config()
+        source_path = self.root / "evidence" / "source.txt"
+        config_hash = sha256_file(self.config_path)
+        manifest, manifest_path = self.rewrite_manifest("T2")
+        manifest["inputs"].append({"path": str(self.config_path), "sha256": config_hash})
+        manifest["derivation"] = {
+            "source": {"path": str(source_path), "sha256": sha256_file(source_path)},
+            "config": {"path": str(self.config_path), "sha256": config_hash},
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         rows = validate_selection(load_publication_config(self.config_path), strict_empirical=False)
         row = rows[1]
         self.assertEqual(row["status"], "DERIVED_VERIFIED")
@@ -238,8 +304,19 @@ class TestPublicationTables(C06Fixture):
         frame = pd.read_csv(rendered["T2:csv"])
         self.assertNotIn("latency_ms", frame.columns)
         self.assertNotIn("gflops", frame.columns)
+        manifest, manifest_path = self.rewrite_manifest("T2", n_not_applicable_reason="parameter count is structural, not a sample metric")
+        manifest.pop("n", None)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        rows = validate_selection(load_publication_config(self.config_path), strict_empirical=False)
+        structural_row = rows[1]
+        self.assertIsNone(structural_row["n"])
+        self.assertIn("structural, not a sample metric", structural_row["n_not_applicable_reason"])
+        self.assertEqual(set(manifest["derivation"]), {"source", "config"})
 
     def test_metrics_preserve_estimands_support_and_protocol_strata(self):
+        self.rewrite_manifest("T3", estimand="top1_accuracy", metric_unit="percent",
+                              unsupported_class_rule="include all declared classes; zero score without predictions",
+                              protocol_stratum="fixture-protocol")
         rows = validate_selection(self.config)
         matrix = evidence_matrix(self.config, rows)
         self.assertEqual(matrix.loc[matrix.item_id == "T3", "n"].iloc[0], 10)
@@ -247,6 +324,11 @@ class TestPublicationTables(C06Fixture):
         self.assertEqual(matrix.loc[matrix.item_id == "T3", "denominator"].iloc[0], 10)
         frame = pd.read_csv(self.items[2]["artifact"])
         self.assertEqual(int(frame.denominator_n.iloc[0]), 10)
+        manifest = json.loads(Path(self.items[2]["manifest"]).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["estimand"], "top1_accuracy")
+        self.assertEqual(manifest["metric_unit"], "percent")
+        self.assertEqual(manifest["unsupported_class_rule"], "include all declared classes; zero score without predictions")
+        self.assertEqual(manifest["protocol_stratum"], "fixture-protocol")
 
     def test_discrepancies_use_compatible_units_and_keep_full_precision(self):
         pp = reconcile_value(84.881, 84.88, observed_unit="%", historical_unit="%",
@@ -268,9 +350,16 @@ class TestPublicationFigures(C06Fixture):
             png = outputs[item_id]
             self.assertTrue(png.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertTrue(png.with_suffix(".pdf").read_bytes().startswith(b"%PDF-"))
+            item = next(item for item in self.config["items"] if item["item_id"] == item_id)
+            self.assertTrue(item["plot"], f"{item_id} render parameters must be selected in config")
 
     def test_figure_3_panel_identity_uses_variant_provenance(self):
         item = next(item for item in self.items if item["item_id"] == "F3")
+        valid_f3 = next(row for row in validate_selection(self.config) if row["item_id"] == "F3")
+        self.assertEqual(valid_f3["panel_variants"]["d"], "ResNet50_F")
+        self.assertEqual(valid_f3["panel_variants"]["e"], "ConvNeXt_F")
+        self.assertIn("ResNet50_F", valid_f3["checkpoint_sha256s"])
+        self.assertIn("ConvNeXt_F", valid_f3["checkpoint_sha256s"])
         self.rewrite_manifest("F3", panel_variants={"d": "ResNet50", "e": "ConvNeXt_F"})
         self.write_config()
         rows = validate_selection(load_publication_config(self.config_path), strict_empirical=False)
@@ -283,6 +372,12 @@ class TestPublicationFigures(C06Fixture):
                 self.assertEqual(row["status"], "EMPIRICAL_VERIFIED")
         manifest = json.loads(Path(next(item for item in self.items if item["item_id"] == "F2")["manifest"]).read_text())
         self.assertEqual(set(manifest["selection"]), {"ids", "levels", "sampling", "seed", "filters"})
+        self.assertEqual(manifest["selection"], {
+            "ids": ["fixture-1", "fixture-2"], "levels": ["Species"],
+            "sampling": "all fixture rows", "seed": 42, "filters": [],
+        })
+        self.assertEqual(next(item for item in self.items if item["item_id"] == "F2")["plot"]["interpretation"], "qualitative visualization only")
+        self.assertEqual(next(item for item in self.items if item["item_id"] == "F4")["plot"]["interpretation"], "exploratory triplet composition")
 
     def test_render_and_case_sensitive_path_failures_block_completion(self):
         from viral_cnn.reporting.figures import verify_latex_figure_paths
@@ -296,6 +391,11 @@ class TestPublicationFigures(C06Fixture):
         bad_item["plot"] = {"x": "absent", "y": "y"}
         with self.assertRaisesRegex(PublicationValidationError, "x/y columns absent"):
             render_figures(self.config, self.root / "bad-figures", validate_selection(self.config))
+        self.write_config()
+        result = assemble_publication(self.config_path, self.root / "failed-render", strict_empirical=True)
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["gates"]["local"], "BLOCKED")
+        self.assertTrue(Path(result["outputs"]["assembly_errors"]).is_file())
 
 
 class TestPublicationManuscript(C06Fixture):
@@ -329,18 +429,32 @@ class TestPublicationManuscript(C06Fixture):
             self.assertEqual(content.count(r"\input{tables/table_"), 12)
             self.assertNotIn("old numeric result", content)
             self.assertNotIn("Old claim 99%", content)
+        review = manuscripts["review"].read_text(encoding="utf-8")
+        submission = manuscripts["submission"].read_text(encoding="utf-8")
+        review_body = re.sub(r"\\section\*\{Editorial review notes\}.*(?=\\end\{document\})", "", review, flags=re.DOTALL)
+        self.assertEqual(review_body.strip(), submission.strip())
+        self.assertNotIn(r"\begin{tabular}", review_body)
+        self.assertEqual(
+            re.findall(r"\\input\{tables/table_\d+\.tex\}", review_body),
+            re.findall(r"\\input\{tables/table_\d+\.tex\}", submission),
+        )
 
     def test_methods_and_results_follow_observed_protocols(self):
         paths = render_manuscript_variants(self.config, self.root)
         content = paths["submission"].read_text(encoding="utf-8")
-        for phrase in ("closed-set", "not a genome-disjoint test", r"3\epsilon/4", "cosine distance", "UMAP is used only"):
+        for phrase in ("closed-set", "not a genome-disjoint test", r"3\epsilon/4", "cosine distance", "UMAP is used only",
+                       "Triplet composition summaries are exploratory", "confidence-interval/calibration populations"):
             self.assertIn(phrase, content)
 
     def test_inconclusive_evidence_limits_genome_and_causal_claims(self):
         content = render_manuscript_variants(self.config, self.root)["submission"].read_text(encoding="utf-8")
-        self.assertIn("does not establish performance on unseen genomes", content)
-        self.assertIn("remain unresolved rather than being inferred", content)
-        self.assertNotIn("due to length bias", content)
+        abstract, rest = content.split(r"\end{abstract}", 1)
+        discussion = rest.split(r"\section{Discussion}", 1)[1].split(r"\section{Conclusions}", 1)[0]
+        conclusions = rest.split(r"\section{Conclusions}", 1)[1].split(r"\subsection*{Availability", 1)[0]
+        self.assertIn("does not establish performance on unseen genomes", abstract)
+        self.assertIn("remain unresolved rather than being inferred", discussion)
+        self.assertIn("does not establish performance on unseen genomes", conclusions)
+        self.assertNotIn("due to length bias", abstract + discussion + conclusions)
 
     def test_optional_c05_state_limits_claims_without_blocking_package(self):
         self.config_data["c05_status"] = "NOT_RUN"
@@ -355,6 +469,10 @@ class TestPublicationManuscript(C06Fixture):
         matrix = evidence_matrix(self.config, validate_selection(self.config))
         self.assertTrue((matrix.historical_status == "HISTORICAL_UNREPRODUCED").all())
         self.assertTrue((matrix.claim_role == "computed").all())
+        result = assemble_publication(self.config_path, self.root / "historical-diagnostic",
+                                      strict_empirical=False, diagnostic_only=True)
+        self.assertEqual(result["status"], "DIAGNOSTIC")
+        self.assertEqual(json.loads(Path(result["manifest"]).read_text())["gate_states"]["empirical"], "PASS")
 
     def test_review_notes_are_preserved_and_submission_is_clean(self):
         paths = render_manuscript_variants(self.config, self.root)
@@ -380,6 +498,7 @@ class TestPackageIsolation(C06Fixture):
         self.write_config()
         from scripts import compile_paper, generate_paper_figures, generate_paper_tables
         for module in (generate_paper_tables, generate_paper_figures, compile_paper):
+            self.assertIs(module.assemble_publication, assemble_publication)
             def reserve(_root, run_id, _interface):
                 target = self.root / "cli-runs" / run_id / "publication"
                 target.mkdir(parents=True)
@@ -402,11 +521,23 @@ class TestPackageIsolation(C06Fixture):
         self.assertNotIn("train(", source)
 
     def test_compile_artifacts_are_isolated_and_historical_sources_unchanged(self):
+        from viral_cnn.reporting.publication import validate_manuscript_paths
         tex = self.root / "manuscript_submission.tex"
-        tex.write_text("\\documentclass{article}", encoding="utf-8")
+        tex.write_text("\\documentclass{article}\n\\input{tables/table_1.tex}\n\\includegraphics{figures/fig_1.png}", encoding="utf-8")
+        (self.root / "tables").mkdir()
+        (self.root / "tables" / "table_1.tex").write_text("table", encoding="utf-8")
+        (self.root / "figures").mkdir()
+        (self.root / "figures" / "fig_1.png").write_bytes(b"PNG")
+        self.assertEqual(validate_manuscript_paths({"submission": tex}, self.root), {})
+        bad_tex = self.root / "bad_submission.tex"
+        bad_tex.write_text("\\includegraphics{figures/Fig_1.png}", encoding="utf-8")
+        self.assertIn("submission", validate_manuscript_paths({"submission": bad_tex}, self.root))
         old_hash = sha256_file(tex)
         paths = {"submission": tex}
+        real_run = subprocess.run
         def fake_run(command, **kwargs):
+            if Path(command[0]).name != "pdflatex":
+                return real_run(command, **kwargs)
             out_arg = next(arg.split("=", 1)[1] for arg in command if arg.startswith("-output-directory="))
             stem = Path(command[-1]).stem
             out = Path(out_arg)
@@ -446,11 +577,18 @@ class TestPackageIsolation(C06Fixture):
         self.config_data["historical_source"] = {
             "manuscript_review": "paper/review.tex", "manuscript_submission": "paper/submission.tex"
         }
+        self.config_data["c05_status"] = "NOT_RUN"
         self.write_config()
         run = reserve_run_directory(self.root, "complete-fixture", "publication")
 
+        real_run = subprocess.run
         def fake_run(command, **kwargs):
-            output = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("-output-directory=")))
+            if Path(command[0]).name != "pdflatex":
+                return real_run(command, **kwargs)
+            output_arg = next((arg.split("=", 1)[1] for arg in command if arg.startswith("-output-directory=")), None)
+            if output_arg is None:
+                raise AssertionError(f"unexpected compiler command: {command!r}")
+            output = Path(output_arg)
             stem = Path(command[-1]).stem
             (output / f"{stem}.pdf").write_bytes(b"%PDF-fixture")
             return type("Result", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
@@ -458,9 +596,12 @@ class TestPackageIsolation(C06Fixture):
         with patch("viral_cnn.reporting.publication._git_state", return_value=("fixture-commit", True)), \
              patch("viral_cnn.reporting.publication.subprocess.run", side_effect=fake_run):
             result = assemble_publication(self.config_path, run, strict_empirical=True)
-        self.assertEqual(result["status"], "ASSEMBLED_REVIEW_REQUIRED")
+        assembly_error = Path(result["outputs"]["assembly_errors"]).read_text(encoding="utf-8") if "assembly_errors" in result.get("outputs", {}) else ""
+        self.assertEqual(result["status"], "ASSEMBLED_REVIEW_REQUIRED", msg=assembly_error)
         self.assertEqual(result["gates"]["local"], "PASS")
         self.assertEqual(len(result["rows"]), 17)
+        review_text = (run / "manuscript_review.tex").read_text(encoding="utf-8")
+        self.assertIn("C05 scratch comparison is NOT_RUN", review_text)
         for mode in ("review", "submission"):
             self.assertTrue((run / mode / f"manuscript_{mode}.pdf").is_file())
             self.assertTrue((run / mode / "compile.log").is_file())
@@ -479,10 +620,22 @@ class TestPublicationManifest(C06Fixture):
         )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertTrue(manifest["git_commit"])
+        self.assertIn("command", manifest)
+        self.assertEqual(manifest["interface"], "cli")
+        self.assertIn("configuration_sha256", manifest)
+        self.assertTrue(manifest["git_dirty"])
+        self.assertTrue(manifest["inputs"])
+        self.assertIn("historical_sources", manifest)
         self.assertEqual(manifest["run_id"], "manifest-run")
         self.assertIn("pandas", manifest["versions"])
         self.assertEqual(manifest["outputs"]["matrix"]["sha256"], sha256_file(artifact))
         self.assertEqual(manifest["gate_states"]["empirical"], "BLOCKED")
+        self.assertIn("local", manifest["gate_states"])
+        self.assertIn("scientific", manifest["gate_states"])
+        self.assertIn("editorial", manifest["gate_states"])
+        self.assertEqual(manifest["gate_states"], {
+            "local": "PASS", "empirical": "BLOCKED", "scientific": "PENDING", "editorial": "PENDING",
+        })
 
     def test_synthetic_run_and_final_report_do_not_claim_reproduction(self):
         self.rewrite_manifest("T1", is_smoke_test=True)
@@ -494,6 +647,12 @@ class TestPublicationManifest(C06Fixture):
         self.assertEqual(matrix.loc[matrix.item_id == "T1", "status"].iloc[0], "SYNTHETIC")
         manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
         self.assertEqual(manifest["gate_states"]["empirical"], "BLOCKED")
+        self.assertIn("command", manifest)
+        self.assertEqual(manifest["interface"], "cli")
+        self.assertTrue(manifest["inputs"])
+        self.assertIn("evidence_matrix", manifest["outputs"])
+        self.assertEqual(len(manifest["inputs"]), 17)
+        self.assertTrue(any(row["diagnostic"] for row in manifest["inputs"]))
         self.assertNotIn("tables", result.get("outputs", {}))
 
 
