@@ -279,23 +279,24 @@ def save_reliability_diagram(
 
         bin_centers = [(b.bin_lower + b.bin_upper) / 2.0 for b in bins]
         bin_widths = [b.bin_upper - b.bin_lower for b in bins]
-        accuracies = [b.accuracy for b in bins]
-        confidences = [b.confidence for b in bins]
+        supported = [i for i, b in enumerate(bins) if b.count > 0]
+        accuracies = [bins[i].accuracy for i in supported]
+        confidences = [bins[i].confidence for i in supported]
         counts = [b.count for b in bins]
 
         # Top panel: Reliability curve and bar gaps
         ax1.plot([0, 1], [0, 1], "--", color="gray", label="Perfect Calibration")
         ax1.bar(
-            bin_centers,
+            [bin_centers[i] for i in supported],
             accuracies,
-            width=bin_widths,
+            width=[bin_widths[i] for i in supported],
             alpha=0.6,
             color="#2b5c8f",
             edgecolor="black",
             label="Empirical Accuracy",
         )
         ax1.plot(
-            bin_centers,
+            [bin_centers[i] for i in supported],
             confidences,
             marker="o",
             color="#d95f02",
@@ -326,14 +327,61 @@ def save_reliability_diagram(
         plt.savefig(plot_file, dpi=300)
         plt.close(fig)
     except Exception as e:
-        # If matplotlib plotting fails, create a placeholder text
-        plot_file.write_text(f"Plot generation skipped: {e}", encoding="utf-8")
+        # A failed renderer must not leave a non-image under a .png suffix.
+        plot_file.unlink(missing_ok=True)
+        return {"csv": str(csv_file), "json": str(json_file), "plot": "", "plot_error": str(e)}
+
+    if not plot_file.is_file() or plot_file.stat().st_size < 8 or plot_file.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+        plot_file.unlink(missing_ok=True)
+        return {"csv": str(csv_file), "json": str(json_file), "plot": "", "plot_error": "invalid PNG output"}
 
     return {
         "csv": str(csv_file),
         "json": str(json_file),
         "plot": str(plot_file),
     }
+
+
+def save_reliability_comparison(
+    before_bins: List[Dict[str, Any]],
+    after_bins: List[Dict[str, Any]],
+    output_dir: Union[str, Path],
+    *,
+    title: str,
+    filename_prefix: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """Write paired before/after bins and a real PNG/PDF reliability panel."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    if sum(int(row["count"]) for row in before_bins) != sum(int(row["count"]) for row in after_bins):
+        raise ValueError("Before/after reliability bins must cover the same number of queries")
+    rows = [{"state": state, **row} for state, bins in (("before", before_bins), ("after", after_bins)) for row in bins]
+    csv_path, json_path = out / f"{filename_prefix}.csv", out / f"{filename_prefix}.json"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    json_path.write_text(json.dumps({"metadata": metadata or {}, "bins": rows}, indent=2), encoding="utf-8")
+    png_path, pdf_path = out / f"{filename_prefix}.png", out / f"{filename_prefix}.pdf"
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, (ax, hist) = plt.subplots(2, 1, figsize=(7, 7), gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
+        ax.plot([0, 1], [0, 1], "--", color="gray", label="Ideal")
+        centers = [(float(row["bin_lower"]) + float(row["bin_upper"])) / 2 for row in before_bins]
+        for state, bins, color in (("Before", before_bins, "#d95f02"), ("After", after_bins, "#1b9e77")):
+            supported = [i for i, row in enumerate(bins) if int(row["count"]) > 0]
+            ax.plot([centers[i] for i in supported], [float(bins[i]["accuracy"]) for i in supported], "o-", color=color, label=state)
+            hist.bar(centers, [int(row["count"]) for row in bins], width=1.0 / len(bins), alpha=0.25, color=color, label=state)
+        ax.set(ylabel="Accuracy", ylim=(-0.02, 1.02), title=title)
+        ax.legend(); ax.grid(True, linestyle=":", alpha=.5)
+        hist.set(xlabel="Top-1 confidence", ylabel="Count", xlim=(0, 1)); hist.legend()
+        fig.tight_layout(); fig.savefig(png_path, dpi=200); fig.savefig(pdf_path); plt.close(fig)
+        if png_path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n" or not pdf_path.read_bytes().startswith(b"%PDF"):
+            raise OSError("Renderer did not produce valid PNG and PDF files")
+    except Exception as exc:
+        png_path.unlink(missing_ok=True); pdf_path.unlink(missing_ok=True)
+        return {"csv": str(csv_path), "json": str(json_path), "png": "", "pdf": "", "error": str(exc)}
+    return {"csv": str(csv_path), "json": str(json_path), "png": str(png_path), "pdf": str(pdf_path)}
 
 
 class TemperatureScaler:
@@ -344,6 +392,8 @@ class TemperatureScaler:
 
     def __init__(self, initial_temperature: float = 1.0):
         self.temperature = float(initial_temperature)
+        self.state = "UNFITTED"
+        self.provenance: Optional[Dict[str, Any]] = None
 
     def fit(
         self,
@@ -352,6 +402,8 @@ class TemperatureScaler:
         split_name: str = "validation",
         max_iter: int = 100,
         lr: float = 0.05,
+        validation_provenance: Optional[Dict[str, Any]] = None,
+        test_provenance: Optional[Dict[str, Any]] = None,
     ) -> "TemperatureScaler":
         """
         Learns scalar temperature T > 0 strictly by minimizing Negative Log-Likelihood
@@ -362,6 +414,15 @@ class TemperatureScaler:
                 f"TemperatureScaler must be fitted strictly on validation split to prevent "
                 f"data leakage. Received split_name='{split_name}'."
             )
+        if self.state == "SEALED":
+            raise RuntimeError("A sealed temperature scaler cannot be refitted")
+        if validation_provenance is not None:
+            if validation_provenance.get("split") != "validation" or not validation_provenance.get("identity"):
+                raise ValueError("validation_provenance must identify a validation artifact")
+            if test_provenance and validation_provenance["identity"] == test_provenance.get("identity"):
+                raise ValueError("validation artifact identity overlaps the test artifact")
+        elif test_provenance is not None:
+            raise ValueError("test provenance requires identified validation provenance")
 
         if isinstance(val_logits, np.ndarray):
             logits_tensor = torch.tensor(val_logits, dtype=torch.float32)
@@ -387,6 +448,27 @@ class TemperatureScaler:
 
         optimizer.step(eval_loss)
         self.temperature = float(torch.exp(log_temp).item())
+        if not math.isfinite(self.temperature) or self.temperature <= 0:
+            raise FloatingPointError("Temperature fit did not produce a finite positive value")
+        self.provenance = {
+            "split_name": split_name, "validation": validation_provenance,
+            "test": test_provenance, "max_iter": max_iter, "lr": lr,
+            "criterion": "validation_clean_cross_entropy", "temperature": self.temperature,
+            "final_validation_nll": float(F.cross_entropy(logits_tensor / self.temperature, labels_tensor).item()),
+            "optimizer": "torch.optim.LBFGS",
+            "optimizer_iterations": int(optimizer.state.get(log_temp, {}).get("n_iter", 0)),
+            "optimizer_function_evaluations": int(optimizer.state.get(log_temp, {}).get("func_evals", 0)),
+            "stopping_tolerances": {"tolerance_grad": optimizer.defaults["tolerance_grad"],
+                                    "tolerance_change": optimizer.defaults["tolerance_change"]},
+        }
+        self.state = "FITTED"
+        return self
+
+    def seal(self) -> "TemperatureScaler":
+        """Freeze a fitted temperature before test evaluation."""
+        if self.state != "FITTED":
+            raise RuntimeError("Only a fitted temperature can be sealed")
+        self.state = "SEALED"
         return self
 
     def transform(
@@ -408,7 +490,9 @@ class TemperatureScaler:
         probs_cal = F.softmax(scaled_logits, dim=-1).numpy()
 
         result: Dict[str, Any] = {
-            "temperature": round(self.temperature, 6),
+            "temperature": self.temperature,
+            "temperature_state": self.state,
+            "temperature_provenance": self.provenance,
             "calibrated_logits": scaled_logits.numpy(),
             "calibrated_probs": probs_cal,
         }
@@ -535,11 +619,11 @@ def audit_model_calibration_by_noise(
                 mask = (bin_indices == b_idx)
                 bin_count = int(np.sum(mask))
                 weight = float(bin_count / n_samples)
-                sum_weights += round(weight, 6)
+                sum_weights += weight
                 if bin_count > 0:
                     bin_conf = float(np.mean(top1_confs[mask]))
                     bin_acc = float(np.mean(is_correct[mask]))
-                    cal_gap = round(float(abs(bin_acc - bin_conf)), 6)
+                    cal_gap = float(abs(bin_acc - bin_conf))
                     ece += (bin_count / n_samples) * cal_gap
                     if cal_gap > mce:
                         mce = cal_gap
@@ -577,8 +661,9 @@ def audit_dataloader_calibration_by_noise(
     device: Union[str, torch.device] = "cpu",
     n_bins: int = 15,
     max_batches: Optional[int] = None,
-    val_max_batches: Optional[int] = 16,
+    val_max_batches: Optional[int] = None,
     seed: int = 42,
+    require_provenance: bool = False,
 ) -> Dict[str, Any]:
     """
     Evaluates probabilistic calibration (ECE, MCE, NLL, Brier score, accuracy, confidence)
@@ -594,6 +679,20 @@ def audit_dataloader_calibration_by_noise(
       I/O overhead by 5x and preventing DataLoader worker OOM kills.
     """
     dev = torch.device(device) if isinstance(device, str) else device
+    def _partition_identity(loader: Any) -> Optional[str]:
+        dataset = getattr(loader, "dataset", None)
+        partitions = getattr(dataset, "_partition_ids", None)
+        if not partitions:
+            return None
+        return ";".join(sorted(str(value) for value in partitions.values()))
+
+    val_partition_identity = _partition_identity(val_loader) if val_loader is not None else None
+    test_partition_identity = _partition_identity(test_loader)
+    if require_provenance:
+        if not val_partition_identity or not test_partition_identity:
+            raise ValueError("C04 requires validation and test loaders with partition-hash identities")
+        if set(val_partition_identity.split(";")) & set(test_partition_identity.split(";")):
+            raise ValueError("Validation and test partition identities overlap")
     amp_enabled = dev.type == "cuda"
     eps = 1e-15
     rates_to_run: List[float] = list(noise_rates)
@@ -603,6 +702,8 @@ def audit_dataloader_calibration_by_noise(
         "seed": seed,
         "n_bins": n_bins,
         "models": {},
+        "calibration_protocol": "c04_clean_validation_temperature_v1",
+        "validation_selection": {"max_batches": val_max_batches, "selection": "all batches unless an explicit limit is configured"},
     }
 
     for model_name, model in models_dict.items():
@@ -612,6 +713,8 @@ def audit_dataloader_calibration_by_noise(
 
         # If val_loader is provided, fit optimal temperature T* on validation clean split
         optimal_temp: Optional[float] = None
+        val_id_chunks: List[np.ndarray] = []
+        test_id_chunks: List[np.ndarray] = []
         if val_loader is not None:
             val_logits_chunks: List[torch.Tensor] = []
             val_labels_chunks: List[torch.Tensor] = []
@@ -628,9 +731,11 @@ def audit_dataloader_calibration_by_noise(
                     val_b_idx += 1
                     if isinstance(batch, (list, tuple)):
                         v_inputs, v_labels = batch[0], batch[1]
+                        v_ids = batch[2] if len(batch) > 2 else None
                     elif isinstance(batch, dict):
                         v_inputs = batch.get("inputs") or batch.get("sequences")
                         v_labels = batch.get("labels") or batch.get("targets")
+                        v_ids = batch.get("query_ids")
                     else:
                         v_inputs, v_labels = batch, None
 
@@ -645,15 +750,36 @@ def audit_dataloader_calibration_by_noise(
                     val_logits_chunks.append(v_logits.cpu().float())
                     if v_labels is not None:
                         val_labels_chunks.append(v_labels.cpu().long())
+                    if v_ids is not None:
+                        val_id_chunks.append(np.asarray(v_ids, dtype=str))
 
-            if val_logits_chunks and val_labels_chunks:
+            if val_logits_chunks and val_labels_chunks and (val_id_chunks or not require_provenance):
                 all_val_logits = torch.cat(val_logits_chunks, dim=0)
                 all_val_labels = torch.cat(val_labels_chunks, dim=0)
                 val_logits_chunks.clear()
                 val_labels_chunks.clear()
                 scaler = TemperatureScaler(initial_temperature=1.0)
-                scaler.fit(all_val_logits, all_val_labels, split_name="validation")
+                import hashlib
+                val_identity = hashlib.sha256("\n".join(np.concatenate(val_id_chunks)).encode()).hexdigest() if val_id_chunks else None
+                scaler.fit(
+                    all_val_logits, all_val_labels, split_name="validation",
+                    validation_provenance={"split": "validation", "identity": val_identity} if val_identity else None,
+                    test_provenance={"split": "test", "identity": test_partition_identity} if require_provenance else None,
+                )
+                scaler.seal()
                 optimal_temp = scaler.temperature
+                audit_report["models"][model_name]["temperature"] = {
+                    **(scaler.provenance or {}), "state": scaler.state,
+                    "n_validation": int(all_val_labels.numel()),
+                    "validation_identity": val_identity,
+                    "selection": "all validation batches" if effective_val_max is None else f"first {effective_val_max} batches",
+                }
+            elif require_provenance:
+                audit_report["models"][model_name]["temperature"] = {
+                    "state": "UNAVAILABLE", "reason": "validation labels/logits/query identities unavailable",
+                    "validation_partition_identity": val_partition_identity,
+                    "test_partition_identity": test_partition_identity,
+                }
                 del all_val_logits, all_val_labels
 
         # Independent deterministic CPU PRNG per noise rate for exact reproducibility
@@ -668,6 +794,7 @@ def audit_dataloader_calibration_by_noise(
         p_true_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
         sum_p_sq_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
         cal_top1_confs_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
+        cal_top1_preds_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
         cal_p_true_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
         cal_sum_p_sq_chunks: Dict[float, List[np.ndarray]] = {r: [] for r in rates_to_run}
         y_chunks: List[np.ndarray] = []
@@ -681,9 +808,11 @@ def audit_dataloader_calibration_by_noise(
 
                 if isinstance(batch, (list, tuple)):
                     batch_inputs, batch_labels = batch[0], batch[1]
+                    batch_ids = batch[2] if len(batch) > 2 else None
                 elif isinstance(batch, dict):
                     batch_inputs = batch.get("inputs") or batch.get("sequences")
                     batch_labels = batch.get("labels") or batch.get("targets")
+                    batch_ids = batch.get("query_ids")
                 else:
                     batch_inputs, batch_labels = batch, None
 
@@ -697,6 +826,8 @@ def audit_dataloader_calibration_by_noise(
                 if batch_labels is not None:
                     b_y_dev = batch_labels.to(dev, non_blocking=amp_enabled).long()
                     y_chunks.append(batch_labels.detach().cpu().numpy().astype(np.int64))
+                if batch_ids is not None:
+                    test_id_chunks.append(np.asarray(batch_ids, dtype=str))
 
                 for rate in rates_to_run:
                     if rate > 0.0:
@@ -735,12 +866,13 @@ def audit_dataloader_calibration_by_noise(
 
                     if optimal_temp is not None:
                         cal_probs = F.softmax(logits_fp32 / optimal_temp, dim=-1)
-                        c_confs, _ = torch.max(cal_probs, dim=-1)
+                        c_confs, c_preds = torch.max(cal_probs, dim=-1)
                         c_sum_sq = torch.sum(cal_probs * cal_probs, dim=-1)
                         c_p_true = torch.zeros(len(b_p_true), dtype=torch.float32, device=dev)
                         if b_y_dev is not None and valid_m is not None and idx_valid is not None:
                             c_p_true[idx_valid] = cal_probs[idx_valid, b_y_dev[idx_valid]]
                         cal_top1_confs_chunks[rate].append(c_confs.cpu().numpy().astype(np.float64))
+                        cal_top1_preds_chunks[rate].append(c_preds.cpu().numpy().astype(np.int64))
                         cal_sum_p_sq_chunks[rate].append(c_sum_sq.cpu().numpy().astype(np.float64))
                         cal_p_true_chunks[rate].append(c_p_true.cpu().numpy().astype(np.float64))
 
@@ -748,6 +880,15 @@ def audit_dataloader_calibration_by_noise(
             raise ValueError("test_loader produced 0 batches for calibration evaluation.")
 
         y_np_shared = np.concatenate(y_chunks, axis=0) if y_chunks else None
+        test_ids = np.concatenate(test_id_chunks) if test_id_chunks else None
+        if test_ids is not None and optimal_temp is not None and val_id_chunks:
+            import hashlib
+            test_identity = hashlib.sha256("\n".join(test_ids).encode()).hexdigest()
+            val_identity = hashlib.sha256("\n".join(np.concatenate(val_id_chunks)).encode()).hexdigest()
+            if test_identity == val_identity:
+                raise ValueError("Validation and test query identities overlap")
+        audit_report["query_identity"] = "partition_hash_and_ordinal" if test_ids is not None else "unavailable"
+        audit_report["n_test_queries"] = int(len(test_ids)) if test_ids is not None else None
         y_chunks.clear()
 
         for rate in rates_to_run:
@@ -815,11 +956,43 @@ def audit_dataloader_calibration_by_noise(
             )
             res_dict = metrics.to_dict()
 
+            def _export_bins(confs: np.ndarray, correctness: np.ndarray) -> List[Dict[str, Any]]:
+                edges = np.linspace(0.0, 1.0, n_bins + 1)
+                indices = np.clip(np.digitize(confs, edges) - 1, 0, n_bins - 1)
+                rows: List[Dict[str, Any]] = []
+                for bin_idx in range(n_bins):
+                    mask = indices == bin_idx
+                    count = int(mask.sum())
+                    mean_conf = float(confs[mask].mean()) if count else None
+                    accuracy = float(correctness[mask].mean()) if count else None
+                    rows.append({
+                        "bin_idx": bin_idx, "bin_lower": float(edges[bin_idx]),
+                        "bin_upper": float(edges[bin_idx + 1]), "count": count,
+                        "sum_confidence": float(confs[mask].sum()) if count else 0.0,
+                        "sum_correct": int(correctness[mask].sum()),
+                        "confidence": mean_conf, "accuracy": accuracy,
+                        "calibration_gap": abs(accuracy - mean_conf) if count else None,
+                        "weight": float(count / n_samples),
+                    })
+                if sum(row["count"] for row in rows) != len(confs):
+                    raise AssertionError("Reliability bin counts do not conserve samples")
+                return rows
+
+            res_dict["reliability_bins"] = {"before": _export_bins(top1_confs, is_correct)}
+            res_dict["temperature_state"] = "SEALED" if optimal_temp is not None else "UNAVAILABLE"
+
             if optimal_temp is not None and cal_top1_confs_chunks[rate]:
                 c_confs = np.concatenate(cal_top1_confs_chunks[rate], axis=0)
+                c_preds = np.concatenate(cal_top1_preds_chunks[rate], axis=0)
+                c_is_correct = c_preds == y_np_shared if y_np_shared is not None else np.zeros(n_samples, dtype=bool)
+                res_dict["reliability_bins"]["after"] = _export_bins(c_confs, c_is_correct)
+                res_dict["calibrated_top1_accuracy"] = float(np.mean(c_is_correct) * 100.0)
+                res_dict["top1_preserved"] = bool(np.array_equal(top1_preds, c_preds))
+                res_dict["top1_discrepancies"] = int(np.count_nonzero(top1_preds != c_preds))
                 c_p_true = np.concatenate(cal_p_true_chunks[rate], axis=0)
                 c_sum_sq = np.concatenate(cal_sum_p_sq_chunks[rate], axis=0)
                 cal_top1_confs_chunks[rate].clear()
+                cal_top1_preds_chunks[rate].clear()
                 cal_p_true_chunks[rate].clear()
                 cal_sum_p_sq_chunks[rate].clear()
 
@@ -831,8 +1004,8 @@ def audit_dataloader_calibration_by_noise(
                     bin_count = int(np.sum(mask))
                     if bin_count > 0:
                         bin_conf = float(np.mean(c_confs[mask]))
-                        bin_acc = float(np.mean(is_correct[mask]))
-                        cal_gap = round(float(abs(bin_acc - bin_conf)), 6)
+                        bin_acc = float(np.mean(c_is_correct[mask]))
+                        cal_gap = float(abs(bin_acc - bin_conf))
                         c_ece += (bin_count / n_samples) * cal_gap
                         if cal_gap > c_mce:
                             c_mce = cal_gap

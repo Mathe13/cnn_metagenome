@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 6,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "ac_gap::assert every declared lineage field including input hashes and checkpoint selection evidence",
+      "text": "Assert every declared lineage field, including input hashes and checkpoint selection evidence.",
+      "signal": "ac_gap",
+      "scope": "training",
+      "status": "candidate",
+      "features": [
+        "c05-finetune-e-comparacao-controlada"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "C2; tests/test_c05_finetune_audit.py:92-101 (training)"
+      ],
+      "created": "2026-11-04T03:12:22Z",
+      "last_seen": "2026-11-04T03:12:22Z"
+    },
+    {
+      "id": "L-002",
+      "key": "spec_precision_gap::use executable assertions for support distinctions and metric values when a check claims runtime evaluation behavior",
+      "text": "Use executable assertions for support distinctions and metric values when a check claims runtime evaluation behavior.",
+      "signal": "spec_precision_gap",
+      "scope": "training",
+      "status": "candidate",
+      "features": [
+        "c05-finetune-e-comparacao-controlada"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "C5; tests/test_c05_finetune_audit.py:187-190 (training)"
+      ],
+      "created": "2026-11-04T03:12:26Z",
+      "last_seen": "2026-11-04T03:12:26Z"
+    },
+    {
+      "id": "L-003",
+      "key": "gate_fail::treat a completion gate failure as a failed feature verification and route its cited gaps for repair",
+      "text": "Treat a completion gate failure as a failed feature verification and route its cited gaps for repair.",
+      "signal": "gate_fail",
+      "scope": "verification",
+      "status": "candidate",
+      "features": [
+        "c05-finetune-e-comparacao-controlada"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/c05-finetune-e-comparacao-controlada/verification.md:3 (verification)"
+      ],
+      "created": "2026-11-04T03:12:29Z",
+      "last_seen": "2026-11-04T03:12:29Z"
+    },
+    {
+      "id": "L-004",
+      "key": "ac_gap::assert every promised input identity hash individually not only a representative input",
+      "text": "Assert every promised input identity hash individually, not only a representative input.",
+      "signal": "ac_gap",
+      "scope": "training-audit",
+      "status": "candidate",
+      "features": [
+        "c05-finetune-e-comparacao-controlada"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "C2; tests/test_c05_finetune_audit.py:116 (training-audit)"
+      ],
+      "created": "2026-11-04T03:27:15Z",
+      "last_seen": "2026-11-04T03:27:15Z"
+    },
+    {
+      "id": "L-005",
+      "key": "gate_fail::treat an unproven check as a release blocking verification failure until its evidence is complete",
+      "text": "Treat an unproven check as a release-blocking verification failure until its evidence is complete.",
+      "signal": "gate_fail",
+      "scope": "training-audit",
+      "status": "candidate",
+      "features": [
+        "c05-finetune-e-comparacao-controlada"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "C2; validate_verification.py output (training-audit)"
+      ],
+      "created": "2026-11-04T03:27:20Z",
+      "last_seen": "2026-11-04T03:27:20Z"
+    }
+  ]
+}

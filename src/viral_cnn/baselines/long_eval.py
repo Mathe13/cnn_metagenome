@@ -12,6 +12,89 @@ from viral_cnn.baselines.paired import (
     bootstrap_species_difference,
 )
 
+C02_LONG_VARIANTS = (
+    "resnet_clean_species",
+    "resnet_noise_species",
+    "convnext_zero_species",
+    "convnext_transfer_species",
+    "convnext_noise_species",
+)
+C02_LONG_PROTOCOL = "c02_audit_v1"
+
+
+def validate_c02_prediction_artifacts(artifacts: List[Dict[str, Any]], queries: pd.DataFrame, *, truth_col: str = "truth_label", query_id_col: str = "query_id") -> Dict[str, pd.DataFrame]:
+    """Validate a five-variant C02 comparison by identity, never by row position."""
+    issues: List[str] = []
+    seen: Dict[str, pd.DataFrame] = {}
+    expected_ids = queries[query_id_col].astype(str).tolist()
+    if len(expected_ids) != len(set(expected_ids)):
+        issues.append("query table contains duplicate query_id")
+    expected_truth = dict(zip(expected_ids, queries[truth_col].astype(int)))
+    expected_variants = set(C02_LONG_VARIANTS)
+    conditions = set()
+    for artifact in artifacts:
+        variant = artifact.get("variant")
+        if variant not in expected_variants:
+            issues.append(f"unknown variant: {variant}")
+            continue
+        if variant in seen:
+            issues.append(f"duplicate variant: {variant}")
+            continue
+        frame = artifact.get("predictions")
+        if not isinstance(frame, pd.DataFrame):
+            issues.append(f"{variant}: predictions must be a DataFrame")
+            continue
+        required = {"query_id", "truth_label", "pred_mean_logits", "pred_majority_vote", "variant", "noise_rate", "handle_short", "long_sequence_protocol"}
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            issues.append(f"{variant}: missing columns {missing}")
+            continue
+        if frame["query_id"].astype(str).duplicated().any():
+            issues.append(f"{variant}: duplicate query_id")
+        if frame["truth_label"].isna().any():
+            issues.append(f"{variant}: missing truth_label")
+        ids = set(frame["query_id"].astype(str))
+        if ids != set(expected_ids):
+            issues.append(f"{variant}: query IDs missing={sorted(set(expected_ids)-ids)} extra={sorted(ids-set(expected_ids))}")
+        if set(frame["variant"].astype(str)) != {variant}:
+            issues.append(f"{variant}: artifact variant identity mismatch")
+        if set(frame["long_sequence_protocol"].astype(str)) != {C02_LONG_PROTOCOL}:
+            issues.append(f"{variant}: protocol identity mismatch")
+        if frame["noise_rate"].nunique(dropna=False) != 1 or frame["handle_short"].nunique(dropna=False) != 1:
+            issues.append(f"{variant}: artifact must contain exactly one condition")
+        for _, row in frame.iterrows():
+            qid = str(row["query_id"])
+            if qid in expected_truth and pd.notna(row["truth_label"]) and int(row["truth_label"]) != expected_truth[qid]:
+                issues.append(f"{variant}: truth mismatch for {qid}")
+        conditions.add((tuple(frame["noise_rate"].drop_duplicates().tolist()), tuple(frame["handle_short"].astype(str).drop_duplicates().tolist())))
+        seen[variant] = frame.copy()
+    missing_variants = sorted(expected_variants - set(seen))
+    if missing_variants:
+        issues.append(f"missing variants: {missing_variants}")
+    if len(conditions) > 1:
+        issues.append("condition mismatch across variants")
+    if issues:
+        raise ValueError("Invalid C02 long comparison: " + "; ".join(issues))
+    return seen
+
+
+def build_c02_table12(artifacts: List[Dict[str, Any]], queries: pd.DataFrame, *, truth_col: str = "truth_label", query_id_col: str = "query_id") -> pd.DataFrame:
+    """Compute the paired Table 12 metrics from observed query rows."""
+    aligned = validate_c02_prediction_artifacts(artifacts, queries, truth_col=truth_col, query_id_col=query_id_col)
+    truth = queries.set_index(queries[query_id_col].astype(str))[truth_col].astype(int)
+    rows = []
+    for variant in C02_LONG_VARIANTS:
+        frame = aligned[variant].copy()
+        frame["query_id"] = frame["query_id"].astype(str)
+        frame = frame.set_index("query_id").loc[truth.index]
+        n = len(truth)
+        for aggregation, pred_col in (("mean_logits", "pred_mean_logits"), ("majority_vote", "pred_majority_vote")):
+            predictions = pd.to_numeric(frame[pred_col], errors="coerce")
+            covered = predictions.notna()
+            correct = predictions.eq(truth) & covered
+            rows.append({"variant": variant, "aggregation": aggregation, "N": n, "covered": int(covered.sum()), "coverage": float(covered.mean()) if n else None, "correct": int(correct.sum()), "accuracy": float(correct.sum() / n) if n else None, "conditional_accuracy": float(correct.sum() / covered.sum()) if covered.any() else None, "excluded": int(n-covered.sum()), "long_sequence_protocol": C02_LONG_PROTOCOL})
+    return pd.DataFrame(rows)
+
 
 def integrate_long_voter_predictions(
     voter_source: Union[pd.DataFrame, Dict[str, Any]],

@@ -71,6 +71,8 @@ def evaluate_predictions(
     if n_total == 0:
         return {
             "n": 0,
+            "n_covered": 0,
+            "n_classes": 0,
             "accuracy": np.nan,
             "accuracy_ci_low": np.nan,
             "accuracy_ci_high": np.nan,
@@ -95,6 +97,8 @@ def evaluate_predictions(
 
     top5 = np.nan
     if top_candidates is not None:
+        if len(top_candidates) != n_total:
+            raise ValueError(f"Length mismatch: y_true={n_total} vs top_candidates={len(top_candidates)}")
         top_matches = []
         for true_label, cand_list in zip(y_t, top_candidates):
             cands = cand_list[:5] if cand_list is not None else []
@@ -103,6 +107,7 @@ def evaluate_predictions(
 
     return {
         "n": n_total,
+        "n_covered": int(covered.sum()),
         "n_classes": len(present_labels),
         "accuracy": accuracy,
         "accuracy_ci_low": ci_low,

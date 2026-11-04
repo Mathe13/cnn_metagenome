@@ -17,6 +17,7 @@ import logging
 import os
 import platform
 import hashlib
+import heapq
 import threading
 import random
 import subprocess
@@ -27,7 +28,10 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
+try:
+    import pyarrow.parquet as pq
+except ImportError:  # Lightweight inventory and run reservation do not need Parquet support.
+    pq = None
 import torch
 import yaml
 
@@ -231,17 +235,55 @@ NOTEBOOK_REQUIREMENTS: Dict[str, List[Dict[str, Any]]] = {
     "short/09": [{"path": "short/kraken_blast_dir", "kind": "directory"}, {"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
     "short/10": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}],
     "short/11": [{"path": "short/ictv_master", "kind": "file"}, {"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"}],
-    "long/01": [{"path": "long/raw_database_final", "kind": "file"}],
-    "long/02": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
+    "long/01": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}],
+    "long/02": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}, {"path": "long/mapping_species_final", "kind": "file"}, *[{"path": f"checkpoints/{v}", "kind": "file"} for v in ("resnet_clean_species", "resnet_noise_species", "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species")]],
     "long/03": [
-        {"path": "long/resultados_inferencia_long_reads_ResNet50.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ResNet50_Noise.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_Z.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_T.parquet", "kind": "file"},
-        {"path": "long/resultados_inferencia_long_reads_ConvNeXt_F.parquet", "kind": "file"},
+        {"path": "results_reproduction/long_voter/manifest_02_voter_inference.json", "kind": "file", "external": True},
     ],
     "long/04": [{"path": "long/ncbi_parquet_dir", "kind": "parquet", "columns": ["sequence"]}],
 }
+
+
+def preflight_latent_inputs(
+    split_files: Dict[str, Sequence[Union[str, Path]]],
+    taxonomy: pd.DataFrame,
+    checkpoint_paths: Dict[str, Union[str, Path]],
+    required_variants: Sequence[str],
+) -> Dict[str, Any]:
+    """Fail before latent metrics if any empirical split, taxonomy label, or checkpoint is absent."""
+    required_splits = ("train", "validation", "test")
+    for split in required_splits:
+        files = [Path(path).expanduser().resolve() for path in split_files.get(split, [])]
+        if not files:
+            raise FileNotFoundError(f"Required nonempty {split} split has no parquet partitions")
+        missing = [path for path in files if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(f"Missing {split} partition: {missing[0]}")
+        if len({str(path) for path in files}) != len(files):
+            raise ValueError(f"Duplicate partition path in {split} split")
+    split_paths = {split: {str(Path(p).expanduser().resolve()) for p in split_files[split]} for split in required_splits}
+    for left, right in (("train", "validation"), ("train", "test"), ("validation", "test")):
+        overlap = split_paths[left].intersection(split_paths[right])
+        if overlap:
+            raise ValueError(f"Partition alias between {left} and {right}: {sorted(overlap)[0]}")
+    needed_columns = {"model_label", "Genus", "Order"}
+    absent = needed_columns - set(taxonomy.columns)
+    if absent:
+        raise ValueError(f"Taxonomy missing required columns: {sorted(absent)}")
+    if taxonomy.empty or taxonomy["model_label"].isna().any():
+        raise ValueError("Taxonomy is empty or contains missing model_label values")
+    for rank in ("Genus", "Order"):
+        if taxonomy[rank].isna().any():
+            first_label = int(taxonomy.loc[taxonomy[rank].isna(), "model_label"].iloc[0])
+            raise ValueError(f"Taxonomy has missing {rank} mapping for model label {first_label}")
+    if taxonomy["model_label"].duplicated().any():
+        raise ValueError("Taxonomy contains duplicate model_label values")
+    for name in required_variants:
+        path = Path(checkpoint_paths.get(name, "")).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"Required checkpoint for '{name}' not found at: {path}")
+    return {"status": "READY", "splits": {k: [str(Path(p).resolve()) for p in split_files[k]] for k in required_splits},
+            "taxonomy_labels": int(taxonomy.model_label.nunique()), "variants": list(required_variants)}
 
 
 def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
@@ -277,6 +319,8 @@ def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_t
                 ok, detail = False, "no parquet files"
             else:
                 try:
+                    if pq is None:
+                        raise ImportError("pyarrow is required to inspect Parquet schema")
                     schema = pq.read_schema(files[0])
                     absent = sorted(set(spec.get("columns", [])) - set(schema.names))
                     if absent:
@@ -305,6 +349,13 @@ def reserve_run_directory(project_root: Union[str, Path], run_id: str, notebook_
         except FileExistsError as exc:
             raise FileExistsError(f"Run output already reserved: {target}") from exc
     return target
+
+
+def reserve_c02_long_run(project_root: Union[str, Path], notebook_id: str, run_id: Optional[str] = None) -> tuple[str, Path]:
+    """Reserve a collision-free namespace for one C02 notebook execution."""
+    import uuid
+    resolved_id = run_id or os.getenv("C02_LONG_RUN_ID") or f"c02-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    return resolved_id, reserve_run_directory(project_root, resolved_id, notebook_id)
 
 
 def file_identity(path: Union[str, Path]) -> Dict[str, Any]:
@@ -630,7 +681,7 @@ def resolve_split_files(
 def read_parquet_sample(
     path_or_files: Union[str, Path, Sequence[Union[str, Path]]],
     columns: Optional[List[str]] = None,
-    max_rows: int = 1000,
+    max_rows: Optional[int] = 1000,
     split: str = "test",
 ) -> pd.DataFrame:
     """
@@ -646,12 +697,14 @@ def read_parquet_sample(
 
     chunks: List[pd.DataFrame] = []
     collected = 0
-    batch_sz = max(1, min(max_rows, 8192))
+    batch_sz = 8192 if max_rows is None else max(1, min(max_rows, 8192))
 
     for fp in files:
         p = Path(fp)
         if not p.exists() or p.is_dir():
             continue
+        if pq is None:
+            raise ImportError("pyarrow is required to read Parquet samples")
         pf = pq.ParquetFile(p)
         schema_names = pf.schema_arrow.names
         valid_cols = None
@@ -664,17 +717,84 @@ def read_parquet_sample(
             df_batch = batch.to_pandas()
             chunks.append(df_batch)
             collected += len(df_batch)
-            if collected >= max_rows:
+            if max_rows is not None and collected >= max_rows:
                 break
-        if collected >= max_rows:
+        if max_rows is not None and collected >= max_rows:
             break
 
     if not chunks:
         return pd.DataFrame()
     out_df = pd.concat(chunks, ignore_index=True)
-    if len(out_df) > max_rows:
+    if max_rows is not None and len(out_df) > max_rows:
         out_df = out_df.iloc[:max_rows].copy()
     return out_df
+
+
+def read_parquet_hash_sample(
+    path_or_files: Union[str, Path, Sequence[Union[str, Path]]],
+    *,
+    columns: Sequence[str],
+    limit: Optional[int],
+    seed: int = 42,
+    split: str = "train",
+    sequence_column: Optional[str] = None,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Stream a deterministic bottom-k SHA-256 sample from Parquet partitions."""
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be positive or None for a census")
+    files = resolve_split_files(path_or_files, split_name=split)
+    log_artifact_path("ParquetHashSample", files, extra=f"split={split}, limit={limit}, seed={seed}")
+    records: list[tuple[int, str, Any]] = []
+    heap: list[tuple[int, int, str, Any]] = []
+    available = 0
+    eligible = 0
+    ordinal = 0
+    common_dir = Path(os.path.commonpath([str(Path(name).resolve().parent) for name in files])) if files else Path.cwd()
+    for file_name in files:
+        parquet_path = Path(file_name)
+        if pq is None:
+            raise ImportError("pyarrow is required to sample Parquet files")
+        pf = pq.ParquetFile(parquet_path)
+        available += int(pf.metadata.num_rows)
+        present = set(pf.schema_arrow.names)
+        selected_columns = [c for c in columns if c in present]
+        if not selected_columns:
+            continue
+        seq_col = sequence_column if sequence_column in selected_columns else selected_columns[0]
+        relative = parquet_path.resolve().relative_to(common_dir).as_posix()
+        for batch in pf.iter_batches(batch_size=8192, columns=selected_columns):
+            values = batch.column(selected_columns.index(seq_col)).to_pylist()
+            for value in values:
+                row_id = f"{relative}#row={ordinal}"
+                ordinal += 1
+                if value is None:
+                    continue
+                eligible += 1
+                score = int.from_bytes(hashlib.sha256(f"{seed}:{row_id}".encode()).digest(), "big")
+                if limit is None:
+                    records.append((score, row_id, value))
+                elif limit > 0:
+                    entry = (-score, -eligible, row_id, value)
+                    if len(heap) < limit:
+                        heapq.heappush(heap, entry)
+                    elif score < -heap[0][0]:
+                        heapq.heapreplace(heap, entry)
+    if limit is not None:
+        records = [(-neg_score, row_id, value) for neg_score, _, row_id, value in heap]
+    records.sort(key=lambda row: (row[0], row[1]))
+    result = pd.DataFrame({"query_id": [r[1] for r in records], "sequence": [r[2] for r in records]})
+    metadata = {
+        "kind": "census" if limit is None or len(records) == eligible else "sample",
+        "available_count": int(available),
+        "population_count": int(eligible),
+        "excluded_count": int(available-eligible),
+        "planned_count": limit,
+        "realized_count": int(len(records)),
+        "criterion": "lowest SHA-256(seed, partition filename, row ordinal) scores",
+        "seed": int(seed),
+        "selected_query_ids": [r[1] for r in records],
+    }
+    return result, metadata
 
 
 def create_optimized_dataloader(

@@ -272,6 +272,15 @@ python3 scripts/run_baseline_comparison.py \
   --output-dir results_reproduction/baselines
 ```
 
+For the paired empirical short benchmark (`c03_paired_v1`), inventory inputs first, then explicitly export shared queries and references. The inventory does not write files or run tools:
+
+```bash
+python3 scripts/prepare_baseline_benchmark.py --config configs/baseline_c03.yaml --mode inventory
+python3 scripts/prepare_baseline_benchmark.py --config configs/baseline_c03.yaml --mode export --run-id c03-unique-run-id
+```
+
+Use the resulting `prepared/` directory with `--mode build-databases`, then follow the 35 method-condition commands from `--mode plan`. The method scripts reject changed query content and refuse to overwrite a condition output. Smoke outputs are tagged and the empirical loader rejects them.
+
 ### 5. First-Layer Motif & Triplet Analysis
 
 Extract first-layer 7-mer convolutional filters and evaluate significance using paired GC-matched and complexity-matched background controls:

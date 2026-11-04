@@ -6,6 +6,13 @@ from viral_cnn.baselines.overlap import (
     load_prepared_baseline_benchmark,
     BenchmarkArtifacts,
 )
+from viral_cnn.baselines.preparation import (
+    BASELINE_PROTOCOL,
+    NOISE_PROTOCOL,
+    inventory_inputs,
+    prepare_queries,
+    write_method_condition_manifest,
+)
 from viral_cnn.baselines.paired import (
     wilson_score_interval,
     evaluate_predictions,
@@ -24,6 +31,11 @@ __all__ = [
     "audit_exact_overlap",
     "load_prepared_baseline_benchmark",
     "BenchmarkArtifacts",
+    "BASELINE_PROTOCOL",
+    "NOISE_PROTOCOL",
+    "inventory_inputs",
+    "prepare_queries",
+    "write_method_condition_manifest",
     "wilson_score_interval",
     "evaluate_predictions",
     "paired_discordance",

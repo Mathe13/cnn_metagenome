@@ -1,10 +1,6 @@
-"""
-Audit report generator and verifier for controlled cross-architecture training experiments.
-Establishes budget definitions, GPU cost models, and scientific causal demarcations.
-"""
+"""Status report for the optional controlled architecture experiment."""
 
 from pathlib import Path
-import json
 from typing import Any, Optional
 
 
@@ -20,142 +16,61 @@ def generate_controlled_experiment_report(
     output_path: Path | str,
     full_dataset_size: int = 1706270,
 ) -> Path:
+    """Generate a report that does not turn missing execution evidence into results.
+
+    The optional C05 scratch comparison has not been activated. Until it has a
+    protocol-specific implementation and complete manifests, historical generic
+    run logs and modeled resource figures are not admissible as controlled evidence.
     """
-    Generates docs/controlled_architecture_experiment.md documenting the controlled
-    training protocol, parity matrix, GPU telemetry, and causal demarcation.
-    """
-    runs_path = Path(runs_dir)
+    del runs_dir, full_dataset_size
     out_file = Path(output_path)
     out_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Collect run records if available
-    run_records: list[dict[str, Any]] = []
-    if runs_path.exists():
-        for json_file in sorted(runs_path.glob("run_log_*.json")):
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    run_records.append(json.load(f))
-            except Exception:
-                pass
-
-    # Baseline theoretical cost estimates for full closed-set training (13,683 classes)
-    # ResNet50 1D: ~43.99M params, ConvNeXt-Tiny 1D (HybridConvNeXt): ~164.01M params
-    resnet_params = "43,992,051"
-    convnext_params = "164,013,811"
-    
-    # Sequence throughput and VRAM on NVIDIA RTX GPU
-    resnet_throughput = 17650  # seq/s
-    convnext_throughput = 12190  # seq/s
-    
-    epochs = 15
-    total_sequences_per_epoch = full_dataset_size
-    resnet_hours_per_epoch = (total_sequences_per_epoch / resnet_throughput) / 3600.0
-    convnext_hours_per_epoch = (total_sequences_per_epoch / convnext_throughput) / 3600.0
-    resnet_total_gpu_hours = resnet_hours_per_epoch * epochs
-    convnext_total_gpu_hours = convnext_hours_per_epoch * epochs
-
-    # Build results table
-    if run_records:
-        results_rows = []
-        for r in run_records:
-            arch = r.get("architecture", "unknown")
-            seed = r.get("seed", 42)
-            noise = r.get("noise_rate", 0.0)
-            evals = r.get("eval_metrics", {})
-            top1 = evals.get("accuracy_top1", 0.0) * 100.0
-            top5 = evals.get("accuracy_top5", 0.0) * 100.0
-            macro_f1 = evals.get("macro_f1", 0.0) * 100.0
-            telem = r.get("telemetry", {})
-            step_ms = telem.get("mean_step_time_ms", 0.0)
-            throughput = telem.get("throughput_seq_per_sec", 0.0)
-            vram = telem.get("peak_vram_mb", 0.0)
-            results_rows.append(
-                f"| `{arch}` | {seed} | {noise:.2f} | {top1:.2f}% | {top5:.2f}% | {macro_f1:.2f}% | {step_ms:.2f} | {throughput:.1f} | {vram:.1f} |"
-            )
-        results_table_md = "\n".join(results_rows)
-    else:
-        results_table_md = (
-            "| `resnet50_1d` | 42 | 0.00 | 84.88% | 94.20% | 84.12% | 14.50 | 17,650.0 | 4,210.0 |\n"
-            "| `resnet50_1d` | 42 | 0.05 | 45.12% | 68.30% | 43.80% | 14.55 | 17,590.0 | 4,210.0 |\n"
-            "| `convnext_tiny_1d` | 42 | 0.00 | 61.14% | 76.50% | 60.25% | 21.00 | 12,190.0 | 5,840.0 |\n"
-            "| `convnext_tiny_1d` | 42 | 0.05 | 52.34% | 71.40% | 51.10% | 21.10 | 12,140.0 | 5,840.0 |"
-        )
 
     content = f"""# Controlled Architecture Experiment and Causal Audit
 
 ## 1. Executive Summary & Confounding Factors in Historical Evidence
 
-This document establishes the experimental protocol, compute resource profiling, and scientific causal demarcations for the cross-architecture evaluation between 1D ResNet50 and ConvNeXt-Tiny for high-cardinality viral taxonomic classification.
-
-In the historical manuscript experiments, several critical training variables were conflated with architectural properties:
-1. **Transfer Learning vs Scratch Training**: ResNet50 clean was trained directly from scratch on Species. ConvNeXt clean was evaluated either from scratch (`ConvNeXt_Z`, achieving 59.18%) or via Genus-to-Species transfer learning (`ConvNeXt_T`, achieving 60.83%), and ConvNeXt noise adaptation (`ConvNeXt_F`, 61.14% clean, 17.38% at $\\epsilon=0.15$) originated from transfer-learned weights.
-2. **Disparate Regularization**: ResNet50 utilized a dropout rate of 0.5, whereas ConvNeXt was evaluated with a dropout rate of 0.7 across all species variants.
-3. **Divergent Checkpoint Selection**: ResNet50 noise fine-tuning selected the final checkpoint at epoch 14 (`finetune_noise_14.pt`), whereas ConvNeXt noise fine-tuning selected the best validation loss checkpoint at epoch 7 (`finetune_noise_7.pt`).
-4. **Step Budget and LR Schedule Discrepancies**: Historical runs used differing multi-phase restart schedules with undocumented initial warmups and stopping thresholds.
-
-Consequently, historical claims that ConvNeXt intrinsically provides superior noise resilience or that ResNet50 intrinsically possesses higher representation capacity were confounded by training regimen differences.
-
----
+**Controlled comparison status: `NOT_RUN`.** No complete C05 `c05_controlled_scratch_v1` manifest set is available. Historical fine-tuning starts from different checkpoints, and the ConvNeXt notebook and model registry disagree on dropout (0.5 and 0.7). The reproduction code selects ResNet by `last` and ConvNeXt by validation Macro-F1; an older best-validation-loss claim is not established by the checkpoint filename. These differences prevent an architecture-only interpretation.
 
 ## 2. Hyperparameter Parity Matrix
 
-To isolate architectural inductive biases from optimization artifacts, the controlled experiment defines strict parameter parity across both models:
+The controlled protocol is a planned configuration, not observed training parity. Its required configuration is AdamW, CosineAnnealingLR with warmup, label smoothing 0.1, dropout 0.5, validation Macro-F1 selection and seeds 42, 43 and 44. The configured 200-step budget is a pilot and does not establish the full experiment.
 
-| Parameter | ResNet50-1D | ConvNeXt-Tiny-1D | Isolation Status |
+| Parameter | ResNet50-1D | ConvNeXt-Tiny-1D | Evidence status |
 | :--- | :--- | :--- | :--- |
-| **Target Classes** | 13,683 (Species) | 13,683 (Species) | Strictly matched |
-| **Input Window** | 512 bp (4 channels: A, C, G, T) | 512 bp (4 channels: A, C, G, T) | Strictly matched |
-| **Optimizer** | `torch.optim.AdamW` | `torch.optim.AdamW` | Strictly matched |
-| **Peak Learning Rate** | $5.0 \\times 10^{{-5}}$ | $5.0 \\times 10^{{-5}}$ | Strictly matched |
-| **Weight Decay** | $1.0 \\times 10^{{-4}}$ | $1.0 \\times 10^{{-4}}$ | Strictly matched |
-| **LR Scheduler** | Linear warmup (20 steps) + `CosineAnnealingLR` | Linear warmup (20 steps) + `CosineAnnealingLR` | Strictly matched |
-| **Loss Function** | CrossEntropy with `label_smoothing=0.1` | CrossEntropy with `label_smoothing=0.1` | Strictly matched |
-| **Dropout Rate** | 0.5 (unified) | 0.5 (unified) | Strictly matched (eliminates 0.5 vs 0.7 gap) |
-| **Batch Size** | 32 (or 8,192 in cluster multi-GPU) | 32 (or 8,192 in cluster multi-GPU) | Strictly matched |
-| **Checkpoint Metric** | `best_val_macro_f1` | `best_val_macro_f1` | Strictly matched (eliminates last vs best gap) |
-| **Random Seeds** | 42, 43, 44 | 42, 43, 44 | Identical multi-seed sequence |
-
----
+| Optimizer | AdamW | AdamW | planned; not measured |
+| Scheduler | CosineAnnealingLR + warmup | CosineAnnealingLR + warmup | planned; not measured |
+| Checkpoint metric | best validation Macro-F1 | best validation Macro-F1 | planned; not measured |
+| Seeds | 42, 43, 44 | 42, 43, 44 | planned; NOT_RUN |
 
 ## 3. GPU Cost Estimation & Compute Resource Profiling
 
-Full retraining across the 13,683 viral species on the complete training set ($N={full_dataset_size:,}$ fragments) imposes significant computational demands:
+**Resource status: `NOT_MEASURED`.** No C05 hardware, processed-sequence count, elapsed time, GPU-hours, peak VRAM or throughput measurements are available. FLOPs and elapsed-time extrapolations are not reported as measurements.
 
-| Metric | ResNet50-1D | ConvNeXt-Tiny-1D | Unit / Notes |
+| Metric | ResNet50-1D | ConvNeXt-Tiny-1D | Status |
 | :--- | :--- | :--- | :--- |
-| **Trainable Parameters** | {resnet_params} | {convnext_params} | Parameters (including 13,683-class head) |
-| **Estimated FLOPs per Sequence** | 1.25 | 1.85 | GFLOPs / sequence (512 bp) |
-| **Inference Latency** | 14.5 | 21.0 | ms / batch (64 sequences) |
-| **Sequence Throughput** | {resnet_throughput:,} | {convnext_throughput:,} | sequences / second (GPU RTX) |
-| **Peak VRAM Allocation** | 4,210 | 5,840 | MB (batch size 64 with AMP) |
-| **Compute Time per Epoch** | {resnet_hours_per_epoch:.2f} | {convnext_hours_per_epoch:.2f} | GPU-hours ($N={full_dataset_size:,}$) |
-| **Full Retraining (15 Epochs)** | {resnet_total_gpu_hours:.1f} | {convnext_total_gpu_hours:.1f} | GPU-hours per seed |
-| **Multi-Seed Retraining (3 Seeds)** | {resnet_total_gpu_hours*3:.1f} | {convnext_total_gpu_hours*3:.1f} | Total GPU-hours across seeds |
-
----
+| Trainable parameters | NOT_MEASURED | NOT_MEASURED | no C05 run manifest |
+| Step latency | NOT_MEASURED | NOT_MEASURED | no C05 run manifest |
+| Throughput | NOT_MEASURED | NOT_MEASURED | no C05 run manifest |
+| Peak VRAM | NOT_MEASURED | NOT_MEASURED | no C05 run manifest |
+| GPU-hours | NOT_MEASURED | NOT_MEASURED | no C05 run manifest |
 
 ## 4. Controlled Cross-Architecture Benchmark Results
 
-Comparative side-by-side performance under controlled parity:
+**Results status: `NOT_RUN`.** A complete comparison requires all six architecture/seed runs, the declared full budget, and evaluation on the same identified test split.
 
-| Architecture | Seed | Noise Rate ($\epsilon$) | Top-1 Accuracy | Top-5 Accuracy | Macro-F1 | Step Latency (ms) | Throughput (seq/s) | Peak VRAM (MB) |
+| Architecture | Seed | Noise Rate | Top-1 Accuracy | Top-5 Accuracy | Macro-F1 | Step Latency | Throughput | Peak VRAM |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-{results_table_md}
-
----
+| `resnet50_1d` | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN |
+| `convnext_tiny_1d` | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN | NOT_RUN |
 
 ## 5. Scientific Causal Demarcation & Manuscript Invariants
-
-In strict compliance with `AGENTS.md` and the acceptance criteria of Specification S12:
 
 > **Scientific Invariant (Causal Demarcation):**
 > {CAUSAL_DEMARCATION_TEXT}
 
-1. **Ablation Separation**: Modifying normalization layers (BatchNorm vs LayerNorm) or depthwise kernel sizes (7x1 vs 3x1) constitutes a distinct architectural ablation experiment. Such modifications alter the standard definitions of ResNet50 and ConvNeXt and must not be conflated with the standard model comparison.
-2. **Textual Demarcation in Manuscript**: All claims in the paper discussing ConvNeXt's noise resistance and ResNet50's clean accuracy must explicitly refer to the evaluated models (`ResNet50_clean`, `ResNet50_noise`, `ConvNeXt_Z`, `ConvNeXt_T`, `ConvNeXt_F`) as specific trained checkpoints rather than making universal assertions about 1D convolutional architectures.
-3. **Reproducibility Contract**: The local repository maintains reproducible micro-benchmarks and deterministic synthetic fixtures verifying 100% of pipeline mechanics without GPU dependencies, while full-scale multi-week training manifests reside in remote JupyterHub cluster storage (AD-005, AD-006).
+Until the controlled protocol has complete, manifest-backed runs, reported differences must remain specific to the identified checkpoints and training configurations. They do not establish universal architecture superiority. The primary evaluation split remains fragment-level and closed-set, not generalization to unseen genomes or species.
 """
-
     out_file.write_text(content, encoding="utf-8")
     return out_file
 
@@ -164,30 +79,25 @@ def verify_controlled_report_consistency(
     report_path: Path | str,
     run_logs: Optional[list[dict[str, Any]]] = None,
 ) -> bool:
-    """
-    Verifies that the generated controlled experiment report contains all mandatory
-    headings, causal demarcation strings, and matches run log records.
-    """
+    """Check the status report's required sections and no-run evidence boundary."""
     path = Path(report_path)
     if not path.exists():
         return False
-
     content = path.read_text(encoding="utf-8")
-
-    required_sections = [
+    required_sections = (
         "# Controlled Architecture Experiment",
         "## 1. Executive Summary & Confounding Factors in Historical Evidence",
         "## 2. Hyperparameter Parity Matrix",
         "## 3. GPU Cost Estimation & Compute Resource Profiling",
         "## 4. Controlled Cross-Architecture Benchmark Results",
         "## 5. Scientific Causal Demarcation & Manuscript Invariants",
-    ]
-
-    for sec in required_sections:
-        if sec not in content:
-            return False
-
+    )
+    if any(section not in content for section in required_sections):
+        return False
     if CAUSAL_DEMARCATION_TEXT not in content:
         return False
-
+    if not run_logs and ("NOT_RUN" not in content or "NOT_MEASURED" not in content):
+        return False
+    if not run_logs and any(value in content for value in ("84.88%", "17,650.0", "4,210.0")):
+        return False
     return True

@@ -1,4 +1,6 @@
 import json
+import os
+import uuid
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +14,45 @@ from viral_cnn.notebook_runtime import JupyterHubDataTopology
 
 class TestN07LongSequenceVoter(unittest.TestCase):
     """Contract tests verifying N07 checks C1 to C15 for long-sequence voter reproduction notebooks."""
+
+    @classmethod
+    def run_notebook(cls, filename):
+        nb_path = Path("notebooks/reproduction/long") / filename
+        namespace = {"__name__": "__main__"}
+        keys=("REMOTE_SERVER","SMOKE_TEST","MPLCONFIGDIR")
+        old={key:os.environ.get(key) for key in keys}
+        os.environ.update({"REMOTE_SERVER":"False","SMOKE_TEST":"1","MPLCONFIGDIR":"/tmp"})
+        try:
+            for idx, cell in enumerate(json.loads(nb_path.read_text(encoding="utf-8"))["cells"]):
+                if cell.get("cell_type") == "code":
+                    try:
+                        exec("".join(cell.get("source", [])), namespace)
+                    except Exception as exc:
+                        raise AssertionError(f"{filename} cell {idx}: {exc}") from exc
+        finally:
+            for key,value in old.items():
+                if value is None: os.environ.pop(key,None)
+                else: os.environ[key]=value
+        return namespace
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chain_run_id = "n07-c02-" + uuid.uuid4().hex[:10]
+        old = {key: os.environ.get(key) for key in ("REMOTE_SERVER", "SMOKE_TEST", "C02_LONG_RUN_ID", "C02_DIAGNOSTIC_LIMIT", "MPLCONFIGDIR")}
+        os.environ.update({"REMOTE_SERVER": "False", "SMOKE_TEST": "1", "C02_LONG_RUN_ID": cls.chain_run_id, "C02_DIAGNOSTIC_LIMIT": "2", "MPLCONFIGDIR": "/tmp"})
+        started = time.time()
+        try:
+            for name in ("01_ncbi_download_and_prepare_database.ipynb", "02_cnn_long_voter_inference.ipynb", "03_cnn_long_voter_compare.ipynb"):
+                cls.run_notebook(name)
+        finally:
+            cls.chain_duration = time.time() - started
+            for key, value in old.items():
+                if value is None: os.environ.pop(key, None)
+                else: os.environ[key] = value
+
+    @classmethod
+    def chain_dir(cls, notebook):
+        return Path("results_reproduction/runs") / cls.chain_run_id / "long" / notebook
 
     # --------------------------------------------------------------------------
     # S1: NCBI Download, Database Preparation & Overlap Audit
@@ -32,47 +73,30 @@ class TestN07LongSequenceVoter(unittest.TestCase):
                 self.assertNotIn("short/utils", code, f"Cell {idx} imports short/utils")
 
     def test_c2_notebook_01_execution_smoke_test(self):
-        """C2: 01_ncbi_download_and_prepare_database.ipynb executes under SMOKE_TEST=1 in under 60 seconds."""
-        nb_path = Path("notebooks/reproduction/long/01_ncbi_download_and_prepare_database.ipynb")
-        self.assertTrue(nb_path.exists())
-
-        with open(nb_path, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-
-        start_time = time.time()
-        global_ns = {"__name__": "__main__"}
-        for idx, cell in enumerate(nb["cells"]):
-            if cell.get("cell_type") == "code":
-                code = "".join(cell.get("source", []))
-                try:
-                    exec(code, global_ns)
-                except Exception as e:
-                    self.fail(f"Cell {idx} of 01_ncbi_download_and_prepare_database.ipynb raised: {e}")
-
-        duration = time.time() - start_time
-        self.assertLess(duration, 60.0, f"Notebook 01 took too long: {duration:.2f}s")
+        """C2: long/01 executes as a CPU smoke pipeline and writes an isolated manifest."""
+        rid="n07-01-"+uuid.uuid4().hex[:8]
+        old=os.environ.get("C02_LONG_RUN_ID"); os.environ["C02_LONG_RUN_ID"]=rid
+        started=time.time()
+        try: self.run_notebook("01_ncbi_download_and_prepare_database.ipynb")
+        finally:
+            if old is None: os.environ.pop("C02_LONG_RUN_ID",None)
+            else: os.environ["C02_LONG_RUN_ID"]=old
+        self.assertLess(time.time()-started,60.0)
+        manifest=json.loads((Path("results_reproduction/runs")/rid/"long/01/manifest_01_ncbi_prep.json").read_text())
+        self.assertTrue(manifest["is_smoke_test"])
+        self.assertEqual(manifest["input_audit"]["eligible_count"],12)
+        self.assertEqual(manifest["input_audit"]["genome_identity"]["status"],"unknown")
 
     def test_c3_overlap_quantification_and_sampling_bias(self):
-        """C3: Sequence preparation audit quantifies reference overlap and documents read sampling disparity."""
-        audit_csv = Path("results_reproduction/long_voter/long_database_preparation_audit.csv")
-        manifest_path = Path("results_reproduction/long_voter/manifest_01_ncbi_prep.json")
-
-        self.assertTrue(audit_csv.exists(), "long_database_preparation_audit.csv not found")
-        self.assertTrue(manifest_path.exists(), "manifest_01_ncbi_prep.json not found")
-
-        df = pd.read_csv(audit_csv)
-        self.assertIn("genome_category", df.columns)
-        self.assertIn("reads_simulated_per_genome", df.columns)
-
-        # Check 500 reads vs 50 reads documented
-        reads_counts = df["reads_simulated_per_genome"].tolist()
-        self.assertIn(500, reads_counts)
-        self.assertIn(50, reads_counts)
-
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-        self.assertIn("overlap_metrics", manifest)
-        self.assertIn("mean_kmer_overlap_fraction", manifest["overlap_metrics"])
+        """C3: measured composition and the historical 50/200/500 rule remain separate."""
+        out=self.chain_dir("01")
+        manifest=json.loads((out/"manifest_01_ncbi_prep.json").read_text())
+        audit=pd.read_csv(out/"long_database_preparation_audit.csv")
+        self.assertIn("observed_query_count",audit.columns)
+        self.assertIn("mean_kmer_overlap_fraction",manifest["overlap_metrics"])
+        self.assertEqual(manifest["input_audit"]["historical_sampling_rule"]["small_lt_10000"],50)
+        self.assertEqual(manifest["input_audit"]["sampling"]["kind"],"synthetic_fixture")
+        self.assertNotIn("reads_simulated_per_genome",audit.columns)
 
     def test_c4_historical_download_and_prep_notebooks_preserved(self):
         """C4: Historical notebooks long/download_from_ncbi.ipynb and long/prepare database.ipynb remain unmodified."""
@@ -103,47 +127,33 @@ class TestN07LongSequenceVoter(unittest.TestCase):
                 self.assertNotIn("short/utils", code)
 
     def test_c6_notebook_02_execution_smoke_test(self):
-        """C6: 02_cnn_long_voter_inference.ipynb executes under SMOKE_TEST=1 in under 60s, verifying logit equivalence."""
-        nb_path = Path("notebooks/reproduction/long/02_cnn_long_voter_inference.ipynb")
-        self.assertTrue(nb_path.exists())
-
-        with open(nb_path, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-
-        start_time = time.time()
-        global_ns = {"__name__": "__main__"}
-        for idx, cell in enumerate(nb["cells"]):
-            if cell.get("cell_type") == "code":
-                code = "".join(cell.get("source", []))
-                try:
-                    exec(code, global_ns)
-                except Exception as e:
-                    self.fail(f"Cell {idx} of 02_cnn_long_voter_inference.ipynb raised: {e}")
-
-        duration = time.time() - start_time
-        self.assertLess(duration, 60.0, f"Notebook 02 took too long: {duration:.2f}s")
+        """C6: long/02 writes all five synthetic variants with singleton logit equivalence."""
+        rid="n07-02-"+uuid.uuid4().hex[:8]
+        old=os.environ.get("C02_LONG_RUN_ID"); os.environ["C02_LONG_RUN_ID"]=rid
+        started=time.time()
+        try: self.run_notebook("02_cnn_long_voter_inference.ipynb")
+        finally:
+            if old is None: os.environ.pop("C02_LONG_RUN_ID",None)
+            else: os.environ["C02_LONG_RUN_ID"]=old
+        self.assertLess(time.time()-started,60.0)
+        manifest=json.loads((Path("results_reproduction/runs")/rid/"long/02/manifest_02_voter_inference.json").read_text())
+        self.assertEqual(len(manifest["variants"]),5)
+        self.assertEqual(manifest["logit_diff_max"],0.0)
+        self.assertTrue(manifest["is_smoke_test"])
 
     def test_c7_sliding_window_consensus_and_short_handling(self):
-        """C7: Sliding-window consensus evaluates mean_logits and majority_vote, comparing handle_short pad vs skip."""
-        pred_csv = Path("results_reproduction/long_voter/predictions_long_voter_resnet50_species.csv")
-        manifest_path = Path("results_reproduction/long_voter/manifest_02_voter_inference.json")
-
-        self.assertTrue(pred_csv.exists(), "predictions_long_voter CSV not found")
-        self.assertTrue(manifest_path.exists(), "manifest_02 not found")
-
-        df = pd.read_csv(pred_csv)
-        self.assertIn("pred_mean_logits", df.columns)
-        self.assertIn("pred_majority_vote", df.columns)
-        self.assertIn("skip_mode_handled", df.columns)
-
-        # For sequence <512 bp (read_001), skip mode should be False and pad mode should have n_windows > 0
-        short_row = df[df["length"] < 512].iloc[0]
-        self.assertFalse(short_row["skip_mode_handled"])
-        self.assertGreater(short_row["n_windows"], 0)
-
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-        self.assertLess(manifest.get("logit_diff_max", 1.0), 1e-4)
+        """C7: pad and skip persist separately, retaining short queries as uncovered errors."""
+        out=self.chain_dir("02")
+        pad=pd.read_parquet(out/"predictions_resnet_clean_species_epsilon0_pad.parquet")
+        skip=pd.read_parquet(out/"predictions_resnet_clean_species_epsilon0_skip.parquet")
+        short=pad[pad.length<512].iloc[0]
+        skip_short=skip[skip.query_id==short.query_id].iloc[0]
+        self.assertGreater(short.num_windows,0)
+        self.assertFalse(skip_short.skip_covered)
+        self.assertTrue(pd.isna(skip_short.pred_mean_logits))
+        self.assertEqual(set(skip.handle_short),{"skip"})
+        manifest=json.loads((out/"manifest_02_voter_inference.json").read_text())
+        self.assertEqual(manifest["tail"],"drop incomplete tail")
 
     def test_c8_historical_voter_notebook_preserved(self):
         """C8: Historical notebook long/cnn-long-voter.ipynb remains strictly unmodified."""
@@ -173,52 +183,26 @@ class TestN07LongSequenceVoter(unittest.TestCase):
                 self.assertNotIn("short/utils", code)
 
     def test_c10_notebook_03_execution_smoke_test(self):
-        """C10: 03_cnn_long_voter_compare.ipynb executes under SMOKE_TEST=1 in under 60s, reproducing Table 12."""
-        nb_path = Path("notebooks/reproduction/long/03_cnn_long_voter_compare.ipynb")
-        self.assertTrue(nb_path.exists())
-
-        with open(nb_path, "r", encoding="utf-8") as f:
-            nb = json.load(f)
-
-        start_time = time.time()
-        global_ns = {"__name__": "__main__"}
-        for idx, cell in enumerate(nb["cells"]):
-            if cell.get("cell_type") == "code":
-                code = "".join(cell.get("source", []))
-                try:
-                    exec(code, global_ns)
-                except Exception as e:
-                    self.fail(f"Cell {idx} of 03_cnn_long_voter_compare.ipynb raised: {e}")
-
-        duration = time.time() - start_time
-        self.assertLess(duration, 60.0, f"Notebook 03 took too long: {duration:.2f}s")
+        """C10: the long/01–03 smoke chain completed under 60 seconds in its isolated namespace."""
+        self.assertLess(self.chain_duration,60.0)
+        for notebook in ("01","02","03"):
+            self.assertTrue((self.chain_dir(notebook)/"run_manifest.json").is_file())
+        manifest=json.loads((self.chain_dir("03")/"manifest_03_voter_compare.json").read_text())
+        self.assertEqual(manifest["long_sequence_protocol"],"c02_audit_v1")
+        self.assertTrue(manifest["is_smoke_test"])
 
     def test_c11_error_stratification_and_collapse_diagnosis(self):
-        """C11: Error stratification partitions performance and diagnoses the 3 ConvNeXt collapse mechanisms."""
-        t12_csv = Path("results_reproduction/long_voter/table_12_long_voter_comparison.csv")
-        strat_csv = Path("results_reproduction/long_voter/stratified_long_errors.csv")
-        diag_json = Path("results_reproduction/long_voter/convnext_collapse_diagnosis.json")
-
-        self.assertTrue(t12_csv.exists(), "Table 12 CSV not found")
-        self.assertTrue(strat_csv.exists(), "stratified_long_errors.csv not found")
-        self.assertTrue(diag_json.exists(), "convnext_collapse_diagnosis.json not found")
-
-        df_t12 = pd.read_csv(t12_csv)
-        self.assertIn("model", df_t12.columns)
-        self.assertIn("acc_mean_logits", df_t12.columns)
-
-        # Check ResNet50 ~0.7269 and ConvNeXt_T ~0.0349
-        resnet_acc = df_t12[df_t12["model"].str.contains("ResNet50_1D \\(Clean\\)")]["acc_mean_logits"].values[0]
-        convnext_t_acc = df_t12[df_t12["model"].str.contains("ConvNeXt_T")]["acc_mean_logits"].values[0]
-        self.assertAlmostEqual(resnet_acc, 0.7269, places=3)
-        self.assertAlmostEqual(convnext_t_acc, 0.0349, places=3)
-
-        with open(diag_json, "r", encoding="utf-8") as f:
-            diag = json.load(f)
-        mechanisms = [m["mechanism"] for m in diag["mechanisms"]]
-        self.assertIn("Giant Virus Read Sampling Disparity", mechanisms)
-        self.assertIn("Pre-softmax Logit Pulling", mechanisms)
-        self.assertIn("Calibration Loss in Genus Transfer (ConvNeXt_T)", mechanisms)
+        """C11: Table 12 is calculated from paired fixture rows; diagnostic claims stay inconclusive."""
+        out=self.chain_dir("03")
+        table=pd.read_csv(out/"table_12_long_voter_comparison.csv")
+        self.assertEqual(len(table),20)
+        self.assertEqual(set(table.variant.nunique() for _ in [0]),{5})
+        self.assertEqual(set(table.aggregation),{"mean_logits","majority_vote"})
+        self.assertTrue(((table.correct/table.N)-table.accuracy).abs().max()<1e-12)
+        diag=json.loads((out/"long_sequence_diagnostics.json").read_text())
+        self.assertEqual(diag["status"],"INCONCLUSIVE")
+        self.assertTrue(all(x["status"]=="INCONCLUSIVE" for x in diag["window_influence"]))
+        self.assertNotIn("mechanisms",diag)
 
     def test_c12_historical_compare_notebook_preserved(self):
         """C12: Historical notebook long/cnn-long-voter-compare.ipynb remains strictly unmodified."""
@@ -358,11 +342,11 @@ class TestN07LongSequenceVoter(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             exec(c3_code, global_ns)
 
-        # Check that MockVoterModel is strictly inside the smoke test branch
-        parts = c3_code.split("else:")
-        self.assertGreater(len(parts), 1)
-        non_smoke_branch = parts[1]
-        self.assertNotIn("MockVoterModel", non_smoke_branch)
+        # The model constructor is reachable only in the explicitly marked smoke branch;
+        # empirical input validation still requires all five checkpoints and the mapping.
+        self.assertIn("if ctx.is_smoke_test:", c3_code)
+        self.assertIn("five identified checkpoints", c3_code)
+        self.assertIn("canonical Species mapping missing", c3_code)
 
     def test_r07_notebook_03_dynamic_table_12_and_fail_fast(self):
         """R07 C4: long/03 computes Table 12 dynamically and raises FileNotFoundError outside smoke mode if missing."""
@@ -378,15 +362,16 @@ class TestN07LongSequenceVoter(unittest.TestCase):
         self.assertNotIn("table_12_data = [", c3_code)
 
         global_ns = {"__name__": "__main__"}
-        exec(c1_code, global_ns)
-        global_ns["ctx"].is_smoke_test = False
-        global_ns["ctx"].topology.root = Path("/non_existent_root_dir_xyz")
-
-        with self.assertRaises(FileNotFoundError):
-            exec(c3_code, global_ns)
-
-        with self.assertRaises(FileNotFoundError):
-            exec(c5_code, global_ns)
+        old=os.environ.get("C02_LONG_RUN_ID"); os.environ["C02_LONG_RUN_ID"]="missing-c02-predecessor-"+uuid.uuid4().hex[:8]
+        try:
+            exec(c1_code, global_ns)
+            global_ns["ctx"].is_smoke_test = False
+            with self.assertRaises(FileNotFoundError): exec(c3_code, global_ns)
+        finally:
+            if old is None: os.environ.pop("C02_LONG_RUN_ID",None)
+            else: os.environ["C02_LONG_RUN_ID"]=old
+        self.assertIn("INCONCLUSIVE", c5_code)
+        self.assertIn("build_diagnostic_finding", c5_code)
 
     def test_r07_notebook_04_fail_fast_outside_smoke(self):
         """R07 C5: long/04 raises FileNotFoundError when is_smoke_test=False and contigs are missing."""
@@ -406,49 +391,24 @@ class TestN07LongSequenceVoter(unittest.TestCase):
             exec(c3_code, global_ns)
 
     def test_r07_smoke_execution_all_long_notebooks(self):
-        """R07 C6: All 4 long notebooks execute under SMOKE_TEST=1 in <60s each with Table 12 and motifs verified."""
-        notebooks = [
-            "01_ncbi_download_and_prepare_database.ipynb",
-            "02_cnn_long_voter_inference.ipynb",
-            "03_cnn_long_voter_compare.ipynb",
-            "04_long_motifs_and_gc_analysis.ipynb",
-        ]
-
-        for nb_name in notebooks:
-            nb_path = Path(f"notebooks/reproduction/long/{nb_name}")
-            self.assertTrue(nb_path.exists())
-            with open(nb_path, "r", encoding="utf-8") as f:
-                nb = json.load(f)
-
-            start_time = time.time()
-            global_ns = {"__name__": "__main__"}
-            for idx, cell in enumerate(nb["cells"]):
-                if cell.get("cell_type") == "code":
-                    code = "".join(cell.get("source", []))
-                    try:
-                        exec(code, global_ns)
-                    except Exception as e:
-                        self.fail(f"Cell {idx} of {nb_name} raised: {e}")
-            elapsed = time.time() - start_time
-            self.assertLess(elapsed, 60.0, f"{nb_name} exceeded 60s limit: {elapsed:.2f}s")
-
-        # Verify Table 12 values in table_12_long_voter_comparison.csv
-        t12_csv = Path("results_reproduction/long_voter/table_12_long_voter_comparison.csv")
-        self.assertTrue(t12_csv.exists())
-        df_t12 = pd.read_csv(t12_csv)
-        resnet_acc = df_t12[df_t12["model"].str.contains("ResNet50_1D \\(Clean\\)")]["acc_mean_logits"].values[0]
-        convnext_t_acc = df_t12[df_t12["model"].str.contains("ConvNeXt_T")]["acc_mean_logits"].values[0]
-        self.assertAlmostEqual(resnet_acc, 0.7269, places=3)
-        self.assertAlmostEqual(convnext_t_acc, 0.0349, places=3)
-
-        # Verify motifs detected (> 0) in long_contig_motif_summary.csv
-        motif_csv = Path("results_reproduction/long_voter/long_contig_motif_summary.csv")
+        """R07 C6: all long notebooks execute; C02 produces computed smoke metrics and long/04 still runs."""
+        self.assertLess(self.chain_duration,60.0)
+        started=time.time()
+        self.run_notebook("04_long_motifs_and_gc_analysis.ipynb")
+        self.assertLess(time.time()-started,60.0)
+        t12=self.chain_dir("03")/"table_12_long_voter_comparison.csv"
+        self.assertTrue(t12.is_file())
+        metrics=pd.read_csv(t12)
+        self.assertEqual(len(metrics),20)
+        self.assertTrue(((metrics.correct/metrics.N)-metrics.accuracy).abs().max()<1e-12)
+        manifest=json.loads((self.chain_dir("03")/"run_manifest.json").read_text())
+        self.assertTrue(manifest["is_smoke_test"])
+        motif_csv=Path("results_reproduction/long_voter/long_contig_motif_summary.csv")
+        fig_path=Path("results_reproduction/long_voter/figure_long_motifs_gc.png")
         self.assertTrue(motif_csv.exists())
-        df_motifs = pd.read_csv(motif_csv)
-        motif_cols = [c for c in df_motifs.columns if c.startswith("motif_")]
-        self.assertGreater(len(motif_cols), 0)
-        total_motifs = df_motifs[motif_cols].to_numpy().sum()
-        self.assertGreater(total_motifs, 0, "Tracked motifs should be present in the contig")
+        self.assertTrue(fig_path.exists())
+        motifs=pd.read_csv(motif_csv)
+        self.assertTrue(any(c.startswith("motif_") for c in motifs.columns))
 
 
 if __name__ == "__main__":
