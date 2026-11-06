@@ -709,6 +709,70 @@ def compute_jaccard_cooccurrence(
     return pd.DataFrame(jaccard, index=motifs, columns=motifs)
 
 
+def compare_jaccard_matrices(
+    first: pd.DataFrame,
+    second: pd.DataFrame,
+    n_permutations: int = 9999,
+    seed: int = 42,
+) -> Dict[str, object]:
+    """Compare shared motif pairs using one off-diagonal triangle and node permutations.
+
+    Permuting motif labels applies the same permutation to the rows and columns of
+    one matrix. Ordinary Pearson p-values are inappropriate for dependent edges.
+    """
+    if n_permutations < 1:
+        raise ValueError("n_permutations must be positive")
+    for matrix in (first, second):
+        if (matrix.index.has_duplicates or matrix.columns.has_duplicates
+                or set(matrix.index) != set(matrix.columns)):
+            raise ValueError("Jaccard matrix must have unique, matching row/column motif IDs")
+
+    common = sorted(set(first.index).intersection(second.index))
+    result: Dict[str, object] = {
+        "status": "INSUFFICIENT_COMMON_MOTIFS",
+        "n_common_motifs": len(common),
+        "n_unique_pairs": len(common) * (len(common) - 1) // 2,
+        "n_positive_pairs_first": 0,
+        "n_positive_pairs_second": 0,
+        "off_diagonal_identical": False,
+        "r": np.nan,
+        "p_value": np.nan,
+        "n_permutations": n_permutations,
+    }
+    if len(common) < 3:
+        return result
+
+    a = first.loc[common, common].to_numpy(dtype=float)
+    b = second.loc[common, common].to_numpy(dtype=float)
+    if (not np.isfinite(a).all() or not np.isfinite(b).all()
+            or not np.allclose(a, a.T) or not np.allclose(b, b.T)):
+        raise ValueError("Jaccard matrices must be finite and symmetric")
+    upper = np.triu_indices(len(common), k=1)
+    x, y = a[upper], b[upper]
+    result.update(
+        n_positive_pairs_first=int(np.count_nonzero(x)),
+        n_positive_pairs_second=int(np.count_nonzero(y)),
+        off_diagonal_identical=bool(np.array_equal(x, y)),
+    )
+    if np.ptp(x) == 0 or np.ptp(y) == 0:
+        result["status"] = "CONSTANT_OFF_DIAGONAL"
+        return result
+
+    observed = float(np.corrcoef(x, y)[0, 1])
+    rng = np.random.default_rng(seed)
+    extreme = 0
+    for _ in range(n_permutations):
+        perm = rng.permutation(len(common))
+        permuted = b[np.ix_(perm, perm)][upper]
+        # A label permutation preserves the off-diagonal distribution and variance.
+        r_null = float(np.corrcoef(x, permuted)[0, 1])
+        extreme += abs(r_null) >= abs(observed) - 1e-12
+    result.update(
+        status="VALID",
+        r=observed,
+        p_value=(extreme + 1) / (n_permutations + 1),
+    )
+    return result
 def analyze_cooccurrence_pairs(
     jaccard_df: pd.DataFrame,
     rscu_map: Dict[str, float],
@@ -730,42 +794,47 @@ def analyze_cooccurrence_pairs(
             })
 
     edges_df = pd.DataFrame(edges)
+    if not edges_df.empty:
+        edges_df = edges_df[edges_df["jaccard"] > 0]
     if edges_df.empty:
         return {
-            "r_canonical": 0.0,
-            "r_reversed": 0.0,
-            "delta_r_orientation": 0.0,
-            "icc_symmetric": 0.0,
-            "r_bidirectional": 0.0,
-            "p_perm": 1.0,
+            "status": "NO_POSITIVE_EDGES", "n_valid_edges": 0,
+            "r_canonical": np.nan, "r_reversed": np.nan,
+            "delta_r_orientation": np.nan, "icc_symmetric": np.nan,
+            "r_bidirectional": np.nan, "p_perm": np.nan,
         }
 
-    top_edges = edges_df.sort_values("jaccard", ascending=False).head(top_k).copy()
+    top_edges = edges_df.sort_values("jaccard", ascending=False, kind="stable").head(top_k).copy()
     top_edges["rscu_u"] = top_edges["u"].map(lambda m: rscu_map.get(m, np.nan))
     top_edges["rscu_v"] = top_edges["v"].map(lambda m: rscu_map.get(m, np.nan))
     valid = top_edges.dropna(subset=["rscu_u", "rscu_v"])
 
     if len(valid) < 2:
         return {
-            "r_canonical": 0.0,
-            "r_reversed": 0.0,
-            "delta_r_orientation": 0.0,
-            "icc_symmetric": 0.0,
-            "r_bidirectional": 0.0,
-            "p_perm": 1.0,
+            "status": "INSUFFICIENT_SCORED_EDGES", "n_valid_edges": len(valid),
+            "r_canonical": np.nan, "r_reversed": np.nan,
+            "delta_r_orientation": np.nan, "icc_symmetric": np.nan,
+            "r_bidirectional": np.nan, "p_perm": np.nan,
         }
 
     x = valid["rscu_u"].values
     y = valid["rscu_v"].values
 
-    r_canon, _ = compute_pearson_r(x, y)
-    r_rev, _ = compute_pearson_r(y, x)
-    delta_r = abs(r_canon - r_rev)
-
-    # Bidirectional symmetrized pairs
+    # Both orientations of each undirected edge enter the same statistic.
     x_bidir = np.concatenate([x, y])
     y_bidir = np.concatenate([y, x])
-    r_bidir, _ = compute_pearson_r(x_bidir, y_bidir)
+    if np.ptp(x_bidir) == 0 or np.ptp(y_bidir) == 0:
+        return {
+            "status": "CONSTANT_NODE_SCORES", "n_valid_edges": len(valid),
+            "r_canonical": np.nan, "r_reversed": np.nan,
+            "delta_r_orientation": np.nan, "icc_symmetric": np.nan,
+            "r_bidirectional": np.nan, "p_perm": np.nan,
+        }
+    r_bidir = float(np.corrcoef(x_bidir, y_bidir)[0, 1])
+    # Pearson(x, y) == Pearson(y, x); these legacy fields are descriptive only.
+    r_canon = float(np.corrcoef(x, y)[0, 1]) if np.ptp(x) and np.ptp(y) else np.nan
+    r_rev = r_canon
+    delta_r = 0.0 if np.isfinite(r_canon) else np.nan
 
     # Intraclass correlation ICC(1, 1)
     pair_data = np.column_stack([x, y])
@@ -778,25 +847,32 @@ def analyze_cooccurrence_pairs(
 
     # Node permutation null test
     rng = np.random.default_rng(seed)
-    unique_nodes = list(set(valid["u"]).union(set(valid["v"])))
+    unique_nodes = sorted(set(valid["u"]).union(set(valid["v"])))
     node_values = np.array([rscu_map.get(node, 1.0) for node in unique_nodes])
     node_to_idx = {node: i for i, node in enumerate(unique_nodes)}
 
     u_indices = np.array([node_to_idx[node] for node in valid["u"]])
     v_indices = np.array([node_to_idx[node] for node in valid["v"]])
 
-    null_corrs = []
+    extreme = 0
+    n_valid_null = 0
     for _ in range(n_permutations):
         perm_vals = rng.permutation(node_values)
         x_perm = perm_vals[u_indices]
         y_perm = perm_vals[v_indices]
-        r_null, _ = compute_pearson_r(x_perm, y_perm)
-        null_corrs.append(r_null)
-
-    null_corrs = np.array(null_corrs)
-    p_perm = float(np.mean(np.abs(null_corrs) >= np.abs(r_canon)))
+        xp = np.concatenate([x_perm, y_perm])
+        yp = np.concatenate([y_perm, x_perm])
+        if np.ptp(xp) == 0:
+            continue
+        r_null = float(np.corrcoef(xp, yp)[0, 1])
+        n_valid_null += 1
+        extreme += abs(r_null) >= abs(r_bidir) - 1e-12
+    p_perm = (extreme + 1) / (n_valid_null + 1) if n_valid_null else np.nan
 
     return {
+        "status": "VALID" if n_valid_null else "NO_VALID_PERMUTATIONS",
+        "n_valid_edges": len(valid),
+        "n_valid_permutations": n_valid_null,
         "r_canonical": float(r_canon),
         "r_reversed": float(r_rev),
         "delta_r_orientation": float(delta_r),
@@ -826,12 +902,15 @@ def compute_exploratory_triplet_rscu(
         return "".join(comp.get(b, "N") for b in reversed(seq))
 
     for raw_seq in sequences:
-        clean_seq = re.sub(r"[^ACGT]", "", raw_seq.upper())
-        if not clean_seq:
+        # Keep ambiguous bases in place: deleting them joins unrelated segments
+        # and can invent triplets and shift all subsequent reading frames.
+        clean_seq = raw_seq.upper()
+        if not any(b in BASE_TO_IDX for b in clean_seq):
             continue
 
         for b in clean_seq:
-            base_counts[b] += 1
+            if b in base_counts:
+                base_counts[b] += 1
 
         seq_variants = [clean_seq]
         if frame_mode == "six_frames":
