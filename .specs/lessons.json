@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 7,
+  "next_id": 8,
   "lessons": [
     {
       "id": "L-001",
@@ -112,6 +112,24 @@
       ],
       "created": "2026-11-06T01:01:16Z",
       "last_seen": "2026-11-06T01:01:16Z"
+    },
+    {
+      "id": "L-007",
+      "key": "ac_gap::assert preservation of labels and row ids for every model when validating paired selection input immutability",
+      "text": "Assert preservation of labels and row IDs for every model when validating paired selection input immutability.",
+      "signal": "ac_gap",
+      "scope": "latent",
+      "status": "candidate",
+      "features": [
+        "c10-paired-umap-all-models"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "verification.md C2; tests/test_c10_paired_umap.py:128 (latent)"
+      ],
+      "created": "2026-11-06T01:23:09Z",
+      "last_seen": "2026-11-06T01:23:09Z"
     }
   ]
 }

@@ -50,6 +50,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: C1; tests/test_c09_latent_resume.py:49; verification.md Resolved finding (notebooks)
 - last seen: 2026-11-06T01:01:16Z
 
+### L-007 - Assert preservation of labels and row IDs for every model when validating paired selection input immutability.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `latent` · harmful: 0
+- features: c10-paired-umap-all-models
+- evidence: verification.md C2; tests/test_c10_paired_umap.py:128 (latent)
+- last seen: 2026-11-06T01:23:09Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

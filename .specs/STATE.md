@@ -34,9 +34,9 @@
 
 ## Handoff
 **Feature**: c10-paired-umap-all-models
-**Where**: plano aprovado e implementação das cinco projeções pareadas, painel e cache por variante; provas locais de seleção/IDs/parâmetros/fallback/publicação em andamento.
-**In progress**: testes de regressão e posterior verificação independente light; validação empírica remota pendente.
-**Next step**: concluir provas e Verifier; atualizar notebook e novo módulo `paired_umap.py` no cluster e executar com entradas canônicas.
+**Where**: C1–C17 comprovados por Verifier independente no commit 38518c7, perfil light PASS e gate sem erros/avisos. Baterias independentes de 93 testes latentes e 9 do notebook 06 verdes. Lacuna inicial da prova de preservação de IDs/labels corrigida para as cinco variantes, sem alteração funcional.
+**In progress**: validação empírica remota e numérica com UMAP real permanecem pendentes; fixtures CPU e fallback PCA real foram exercitados localmente.
+**Next step**: atualizar notebook e módulo `paired_umap.py` no cluster, executar com entradas canônicas e inspecionar `umap_comparison.png`/JSON; comparar amostras e proveniência antes de afirmar reprodução da Figura 2.
 **Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
-**Uncommitted**: implementação, documentação e provas C10. Artefatos locais preexistentes permanecem fora do commit.
+**Uncommitted**: nenhum arquivo de implementação C10; relatório independente e lição L-007 acompanham o fechamento. Artefatos locais preexistentes permanecem fora do commit.
 **Branch**: main
