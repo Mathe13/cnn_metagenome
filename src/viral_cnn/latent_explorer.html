@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Explorar projeções taxonômicas</title>
+<style>
+*{box-sizing:border-box}body{font:15px system-ui,sans-serif;background:#f3f5f8;color:#172336;margin:0;padding:24px}header,.controls{max-width:1600px;margin:auto}h1{font-size:24px;margin:0 0 8px}.note{color:#536176;line-height:1.6}.controls{background:white;padding:16px;border-radius:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:16px;margin-bottom:20px}input{width:300px;max-width:100%;padding:9px;border:1px solid #a3b0c0;border-radius:6px}button{padding:9px 14px;background:#203f65;color:white;border:0;border-radius:6px;cursor:pointer}#status{flex:1;min-width:200px}main{max-width:1600px;margin:auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}article{background:white;border:1px solid #dfe5ed;border-radius:12px;padding:14px;min-width:0}h2{font-size:16px;margin:0 0 8px}canvas{width:100%;height:340px;touch-action:none;cursor:crosshair}#tip{position:fixed;display:none;background:#15253f;color:white;padding:9px 12px;border-radius:6px;pointer-events:none;max-width:420px;white-space:pre-wrap;font-size:12px;z-index:10}footer{max-width:1600px;margin:18px auto;line-height:1.6;color:#536176}@media(max-width:1100px){main{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){body{padding:12px}main{grid-template-columns:1fr}}
+</style>
+<header><h1>Projeções dos cinco modelos</h1><div class="note">Mesmos fragmentos e cores entre modelos. Busque um gênero para destacá-lo em todos os painéis.<br>Arraste para mover · roda do mouse para zoom · passe sobre um ponto para consultar seu ID.</div></header>
+<div class="controls"><label for="genus">Gênero</label><input id="genus" list="genera" placeholder="Digite o nome do gênero" autocomplete="off"><datalist id="genera"></datalist><button id="clear">Mostrar todos</button><button id="reset">Restaurar zoom</button><span id="status" role="status"></span></div>
+<main id="plots"></main><div id="tip"></div>
+<footer>QUALITATIVE ONLY · Os ajustes e eixos são independentes. A posição visual não mede distância filogenética, acurácia ou generalização a genomas novos. Milhares de cores não são distinguíveis; use a busca para investigar um gênero. Nenhum fragmento da amostra foi removido nesta visualização.</footer>
+<script id="data" type="application/json">__PROJECTION_DATA__</script>
+<script>
+'use strict';
+const data=JSON.parse(document.getElementById('data').textContent);
+const input=document.getElementById('genus'), status=document.getElementById('status'), tip=document.getElementById('tip');
+let selected=-1;
+const choices=document.getElementById('genera');
+data.genera.forEach((name,i)=>{const option=document.createElement('option');option.value=name;option.label=`${data.counts[i]} fragmentos`;choices.append(option)});
+function updateStatus(invalid=false){status.textContent=invalid?'Gênero não encontrado: escolha um nome da lista.':selected<0?`${data.ids.length.toLocaleString()} fragmentos · ${data.genera.length.toLocaleString()} gêneros`:`${data.genera[selected]} · ${data.counts[selected]} fragmentos em cada modelo`;}
+const panels=data.models.map(model=>{
+ const article=document.createElement('article'),title=document.createElement('h2'),canvas=document.createElement('canvas');
+ title.textContent=`${model.name} · ${data.method}`;article.append(title,canvas);document.getElementById('plots').append(article);
+ const x=model.xy.map(p=>p[0]),y=model.xy.map(p=>p[1]);
+ let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
+ model.xy.forEach(p=>{xmin=Math.min(xmin,p[0]);xmax=Math.max(xmax,p[0]);ymin=Math.min(ymin,p[1]);ymax=Math.max(ymax,p[1])});
+ const cx=(xmin+xmax)/2,cy=(ymin+ymax)/2,span=Math.max(xmax-xmin,ymax-ymin,1e-9)*1.12;
+ const panel={canvas,model,view:{cx,cy,span},initial:{cx,cy,span},drag:null,screen:[]};
+ panel.draw=()=>{
+  const box=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
+  canvas.width=Math.round(box.width*dpr);canvas.height=Math.round(box.height*dpr);
+  const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+  const w=box.width,h=box.height,left=46,right=w-12,top=12,bottom=h-38,scale=Math.min(right-left,bottom-top)/panel.view.span;
+  const ox=(left+right)/2,oy=(top+bottom)/2;
+  panel.scale=scale;panel.screen=model.xy.map(p=>[ox+(p[0]-panel.view.cx)*scale,oy-(p[1]-panel.view.cy)*scale]);
+  ctx.fillStyle='white';ctx.fillRect(0,0,w,h);ctx.strokeStyle='#ccd4df';ctx.strokeRect(left,top,right-left,bottom-top);
+  ctx.font='10px system-ui';ctx.fillStyle='#536176';
+  for(let j=0;j<5;j++){
+   const px=left+j*(right-left)/4,py=bottom-j*(bottom-top)/4;
+   ctx.textAlign='center';ctx.fillText((panel.view.cx+(px-ox)/scale).toPrecision(3),px,bottom+14);
+   ctx.textAlign='right';ctx.fillText((panel.view.cy-(py-oy)/scale).toPrecision(3),left-4,py+3);
+  }
+  ctx.textAlign='center';ctx.fillText(`${data.method} 1`,(left+right)/2,h-4);
+  ctx.save();ctx.translate(11,(top+bottom)/2);ctx.rotate(-Math.PI/2);ctx.fillText(`${data.method} 2`,0,0);ctx.restore();
+  ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
+  const point=(i,r)=>{const p=panel.screen[i];ctx.fillRect(p[0]-r,p[1]-r,r*2,r*2)};
+  ctx.globalAlpha=selected<0?0.5:0.17;
+  for(const i of data.order){ctx.fillStyle=selected<0?data.colors[data.genus[i]]:'#8b98a8';point(i,data.ids.length>10000?1:1.6)}
+  if(selected>=0){ctx.globalAlpha=1;ctx.fillStyle=data.colors[selected];for(const i of data.order)if(data.genus[i]===selected)point(i,3)}
+  ctx.restore();
+ };
+ canvas.addEventListener('wheel',e=>{
+  e.preventDefault();const box=canvas.getBoundingClientRect(),mx=e.clientX-box.left,my=e.clientY-box.top;
+  const ox=(46+box.width-12)/2,oy=(12+box.height-38)/2,factor=Math.exp(Math.max(-1,Math.min(1,e.deltaY*0.0015)));
+  const old=panel.view.span,next=Math.max(span/1000,Math.min(span*1000,old*factor)),ratio=next/old;
+  panel.view.cx+=(mx-ox)/panel.scale*(1-ratio);panel.view.cy-=(my-oy)/panel.scale*(1-ratio);panel.view.span=next;panel.draw();tip.style.display='none';
+ },{passive:false});
+ canvas.addEventListener('pointerdown',e=>{panel.drag={x:e.clientX,y:e.clientY,cx:panel.view.cx,cy:panel.view.cy};canvas.setPointerCapture(e.pointerId);tip.style.display='none'});
+ const end=()=>{panel.drag=null};canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
+ canvas.addEventListener('pointerleave',()=>{tip.style.display='none'});
+ canvas.addEventListener('pointermove',e=>{
+  if(panel.drag){panel.view.cx=panel.drag.cx-(e.clientX-panel.drag.x)/panel.scale;panel.view.cy=panel.drag.cy+(e.clientY-panel.drag.y)/panel.scale;panel.draw();return}
+  const box=canvas.getBoundingClientRect(),px=e.clientX-box.left,py=e.clientY-box.top;let nearest=-1,best=64;
+  panel.screen.forEach((p,i)=>{if(selected>=0&&data.genus[i]!==selected)return;const d=(p[0]-px)**2+(p[1]-py)**2;if(d<best){best=d;nearest=i}});
+  if(nearest<0){tip.style.display='none';return}
+  tip.textContent=`${data.genera[data.genus[nearest]]}\nID: ${data.ids[nearest]}\nSpecies label: ${data.labels[nearest]}`;
+  tip.style.display='block';tip.style.left=Math.max(4,Math.min(e.clientX+12,window.innerWidth-tip.offsetWidth-8))+'px';tip.style.top=Math.max(4,Math.min(e.clientY+12,window.innerHeight-tip.offsetHeight-8))+'px';
+ });
+ return panel;
+});
+function drawAll(){panels.forEach(p=>p.draw())}
+input.addEventListener('input',()=>{const value=input.value.trim().toLowerCase();selected=data.genera.findIndex(g=>g.toLowerCase()===value);updateStatus(value!==''&&selected<0);drawAll()});
+document.getElementById('clear').onclick=()=>{input.value='';selected=-1;updateStatus();drawAll()};
+document.getElementById('reset').onclick=()=>{panels.forEach(p=>{p.view={...p.initial}});drawAll()};
+window.addEventListener('resize',drawAll);updateStatus();drawAll();
+</script></html>

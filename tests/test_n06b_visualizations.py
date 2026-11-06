@@ -132,7 +132,8 @@ class VisualizationNotebookTests(unittest.TestCase):
                 return reserve_run_directory(root, run, name)
             env = {'REMOTE_SERVER': 'False', 'SMOKE_TEST': '1', 'DATA_ROOT': str(root),
                    'LATENT_VIS_MAX_GENERA': 'all', 'LATENT_VIS_MAX_SAMPLES': 'auto',
-                   'LATENT_VIS_EXECUTION_MODE': 'reuse', 'LATENT_VIS_REUSE_RUN_ID': ''}
+                   'LATENT_VIS_EXECUTION_MODE': 'reuse', 'LATENT_VIS_REUSE_RUN_ID': '',
+                   'LATENT_VIS_PROJECTION_SOURCE_DIR': ''}
             with patch.dict(os.environ, env), patch('torch.cuda.is_available', return_value=False), \
                  patch('viral_cnn.notebook_runtime.reserve_run_directory', side_effect=reserve), \
                  patch('viral_cnn.eval.latent.extract_latent_embeddings', side_effect=AssertionError('extraction forbidden')), \
@@ -142,7 +143,12 @@ class VisualizationNotebookTests(unittest.TestCase):
                 with patch('viral_cnn.visualization_cache.SelectedParquetFeatures.__getitem__', side_effect=AssertionError('decoded features on reuse')), \
                      patch('viral_cnn.eval.latent.export_umap_projection', side_effect=AssertionError('refit on reuse')):
                     second = self.execute()
-            for scope in (first, second):
+                with patch.dict(os.environ, {'LATENT_VIS_PROJECTION_SOURCE_DIR': str(first['output_dir'])}), \
+                     patch('viral_cnn.visualization_cache.open_test_embeddings', side_effect=AssertionError('opened embeddings on redraw')), \
+                     patch('viral_cnn.paired_umap.run_paired_umap', side_effect=AssertionError('refit on redraw')), \
+                     patch('viral_cnn.visualization_cache.create_visualization_fixtures', side_effect=AssertionError('created embeddings on redraw')):
+                    third = self.execute()
+            for scope in (first, second, third):
                 manifest = json.loads((scope['output_dir'] / 'manifest.json').read_text())
                 self.assertEqual(manifest['metrics_summary']['projection_variants'], 5)
                 self.assertEqual(manifest['metrics_summary']['models_loaded'], 0)
@@ -151,10 +157,16 @@ class VisualizationNotebookTests(unittest.TestCase):
                 self.assertEqual(len(scope['comparison']['sample'].frame), 30)
                 self.assertEqual(scope['comparison']['sample'].frame['Genus'].nunique(), 3)
                 self.assertTrue((scope['output_dir'] / 'umap_comparison.png').is_file())
+                self.assertTrue((scope['output_dir'] / 'umap_comparison.html').is_file())
                 self.assertEqual(len(list(scope['output_dir'].glob('umap_projection*.csv'))), 5)
                 self.assertFalse(any('_train_' in p['path'] or '_validation_' in p['path'] for p in manifest['inputs']))
             self.assertTrue(all(x.features.stats['selected_rows'] == 30 for x in first['embeddings'].values()))
             self.assertTrue(all(x.features.stats['selected_rows'] == 0 for x in second['embeddings'].values()))
+            self.assertEqual(third['embeddings'], {})
+            for name in MODEL_NAMES:
+                source = Path(first['comparison']['metadata']['projections'][name]['path'])
+                copied = Path(third['comparison']['metadata']['projections'][name]['path'])
+                self.assertEqual(source.read_bytes(), copied.read_bytes())
 
 
 if __name__ == '__main__':
