@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 6,
+  "next_id": 7,
   "lessons": [
     {
       "id": "L-001",
@@ -94,6 +94,24 @@
       ],
       "created": "2026-11-04T03:27:20Z",
       "last_seen": "2026-11-04T03:27:20Z"
+    },
+    {
+      "id": "L-006",
+      "key": "ac_gap::teste parametros e falhas de configuracao na primeira celula real do notebook alem do default da classe auxiliar quando o contrato nomear o notebook",
+      "text": "Teste parâmetros e falhas de configuração na primeira célula real do notebook, além do default da classe auxiliar, quando o contrato nomear o notebook.",
+      "signal": "ac_gap",
+      "scope": "notebooks",
+      "status": "candidate",
+      "features": [
+        "c09-latent-resume-validated"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "C1; tests/test_c09_latent_resume.py:49; verification.md Resolved finding (notebooks)"
+      ],
+      "created": "2026-11-06T01:01:16Z",
+      "last_seen": "2026-11-06T01:01:16Z"
     }
   ]
 }

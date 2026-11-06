@@ -44,6 +44,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: C2; validate_verification.py output (training-audit)
 - last seen: 2026-11-04T03:27:20Z
 
+### L-006 - Teste parâmetros e falhas de configuração na primeira célula real do notebook, além do default da classe auxiliar, quando o contrato nomear o notebook.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `notebooks` · harmful: 0
+- features: c09-latent-resume-validated
+- evidence: C1; tests/test_c09_latent_resume.py:49; verification.md Resolved finding (notebooks)
+- last seen: 2026-11-06T01:01:16Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

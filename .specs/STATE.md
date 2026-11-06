@@ -33,9 +33,9 @@
 
 ## Handoff
 **Feature**: c09-latent-resume-validated
-**Where**: reutilização e progresso por etapa implementados; provas locais de retomada, corrupção, falha parcial e isolamento executadas.
-**In progress**: verificação independente light após commit da implementação.
-**Next step**: concluir verificação e executar notebook 06 no cluster com dados e checkpoints canônicos; comparar a auditoria da sonda com inicialização identificada antes de afirmar equivalência histórica.
+**Where**: C1–C18 comprovados por Verifier independente no commit c26f179; perfil light PASS, gate sem erros/avisos, 79 testes latentes e 9 testes notebook 06 verdes. Retomada, corrupção, falha parcial, fontes transitivas e isolamento cobertos em fixtures CPU.
+**In progress**: validação empírica remota ainda não executada.
+**Next step**: atualizar notebook e módulo `latent_resume.py` no cluster, executar em reuse com os artefatos canônicos e comparar a auditoria da sonda com inicialização identificada antes de afirmar equivalência histórica.
 **Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
-**Uncommitted**: implementação/documentação/provas C09; artefatos locais preexistentes permanecem fora do commit.
+**Uncommitted**: nenhum arquivo de implementação C09; relatório e lição independente acompanham o fechamento. Artefatos locais preexistentes permanecem fora do commit.
 **Branch**: main
