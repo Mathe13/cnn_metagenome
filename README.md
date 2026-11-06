@@ -298,6 +298,8 @@ python3 scripts/run_motif_analysis.py \
 
 Notebook 06 defaults to validated reuse (`LATENT_EXECUTION_MODE=reuse`); use `rerun` to recalculate or `LATENT_REUSE_RUN_ID` to select a prior run. It validates embeddings and completed stage checkpoints, writes each execution to a new directory, and records decisions in `resume_report.json`. See [restart instructions and legacy limitations](docs/latent_resume.md), including the separately identified deterministic probe initialization `c09_seeded_probe_init_v1`.
 
+For figures from archived test embeddings only, use [notebook 06b](notebooks/reproduction/short/06b_latent_visualizations.ipynb). It generates the five paired projections without loading train/validation embeddings or models. See [configuration, selective reading, and provenance](docs/latent_visualizations_only.md).
+
 Its [C10 paired visualization](docs/paired_umap.md) projects all five variants on the same identified test fragments, with shared genus colors and a five-panel PNG. `LATENT_UMAP_MAX_SAMPLES=100` and `LATENT_UMAP_MAX_GENERA=10` are the defaults. Each projection has its own validated checkpoint; PCA fallback is explicitly labeled. Updating the notebook can invalidate non-embedding stage caches through the existing global code hash; canonical compatible embeddings remain reusable.
 
 Extract pre-classifier representations, evaluate metric clustering with Cosine KNN ($k=5$, 80/20 train/test reference split) and Silhouette scores, and project via UMAP:
@@ -377,6 +379,7 @@ for r in [current_dir, current_dir.parent, current_dir.parent.parent, current_di
 | `04_finetune_convnext_species.ipynb` | Fine-tuning ConvNeXt with $\epsilon=0.05$ substitution noise | Support for **Tables 1, 3, 4** |
 | `05_ictv_taxonomy_curation.ipynb` | ICTV Master Species List (MSL41) & NCBI cross-mapping | Taxonomic mappings |
 | `06_ictv_latent_space_and_hierarchy.ipynb` | High-dimensional embeddings, Cosine KNN ($k=5$), Silhouette, UMAP | **Tables 5, 6, Fig. 2** |
+| `06b_latent_visualizations.ipynb` | Paired projections from archived test embeddings only | Exploratory five-model visualization; no quantitative recomputation |
 | `07_first_layer_motifs_and_perturbation.ipynb` | 1st-layer 7-mers, paired GC-matched & random controls (Wilcoxon FDR) | **Table 8, Fig. 3** |
 | `08_triplet_composition_and_cooccurrence.ipynb` | Exploratory triplet composition, relative synonymous codon usage, co-occurrence | **Tables 9, 10, 11, Figs. 4, 5** |
 | `09_benchmark_cnns_kraken2_blast_overlap.ipynb` | Paired baseline benchmark, exact training overlap stratification | **Baseline benchmarks** |
