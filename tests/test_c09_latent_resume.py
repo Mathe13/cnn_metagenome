@@ -46,6 +46,22 @@ class ResumeTests(unittest.TestCase):
         return save_embedding_artifact(value or self.a, (directory or self.old) / 'features')
 
     def test_modes_and_sources(self):
+        import ast
+        cell = next(''.join(c['source']) for c in json.loads(NOTEBOOK.read_text())['cells']
+                    if c['cell_type'] == 'code')
+        assignment = next(n for n in ast.parse(cell).body if isinstance(n, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == 'LATENT_EXECUTION_MODE' for t in n.targets))
+        scope = {'os': os}
+        with patch.dict(os.environ, {}, clear=True):
+            exec(compile(ast.Module(body=[assignment], type_ignores=[]), 'first_cell', 'exec'), scope)
+        self.assertEqual(scope['LATENT_EXECUTION_MODE'], 'reuse')
+        with patch.dict(os.environ, {'LATENT_EXECUTION_MODE': 'invalid'}):
+            with patch('viral_cnn.notebook_runtime.setup_notebook_runtime') as setup:
+                with patch('viral_cnn.eval.latent.extract_latent_embeddings') as extract:
+                    with self.assertRaisesRegex(ValueError, 'LATENT_EXECUTION_MODE'):
+                        exec(cell, {})
+                extract.assert_not_called()
+            setup.assert_not_called()
         source = self.run_dir('recent')
         os.utime(self.old, (10, 10))
         os.utime(source, (20, 20))
@@ -305,6 +321,9 @@ class NotebookResumeTests(unittest.TestCase):
                 self.assertEqual(before, {p: _sha256_file(p) for p in first_dir.iterdir() if p.is_file()})
                 pd.testing.assert_frame_equal(first['table5_df'], second['table5_df'])
                 pd.testing.assert_frame_equal(first['probe_df'], second['probe_df'])
+                csv = (second['output_dir'] / 'umap_projection_convnext_f.csv').read_text()
+                self.assertTrue(csv.startswith('# QUALITATIVE ONLY:'))
+                self.assertIn('# Do not infer quantitative cluster separation or phylogenetic distance.', csv)
                 manifest = json.loads((second['output_dir'] / 'manifest.json').read_text())
                 self.assertEqual(manifest['configuration']['latent_execution_mode'], 'reuse')
                 report = json.loads((second['output_dir'] / 'resume_report.json').read_text())
