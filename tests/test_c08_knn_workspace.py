@@ -352,7 +352,8 @@ class KNNWorkspaceTests(unittest.TestCase):
     def test_notebook_silhouette_umap_limits_and_manifest(self):
         source = notebook_code()
         self.assertIn("200 if ctx.is_smoke_test else 5000", source)
-        self.assertIn("umap_feats[:100]", source)
+        # C10 replaces storage-order slicing with a bounded shared genus sample.
+        self.assertIn("run_paired_umap(", source)
         self.assertIn('"silhouette_sample_sizes"', source)
         self.assertIn('"silhouette_excluded_classes"', source)
         self.assertIn('"umap_sample_size"', source)
