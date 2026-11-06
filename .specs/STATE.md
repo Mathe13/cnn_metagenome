@@ -29,12 +29,13 @@
 | AD-023 | C05 usa o protocolo `c05_finetune_audit_v1` com linhagem/hash/ordem de classes, papéis last/best/selected e resume apenas por escolha explícita com identidade e estados completos; a comparação scratch pareada `c05_controlled_scratch_v1` permanece `NOT_RUN` sem ativação e orçamento completo de seis execuções. | Preserva adaptações históricas e impede promoção de smoke, checkpoint por nome ou piloto de 200 passos a evidência empírica ou causal. | active | 2026-11-03 |
 | AD-024 | Pacotes de publicação usam `c06_strict_v1`: seleção explícita dos 17 itens, hashes e manifestos por entrada, matriz com estados separados e namespace C00 exclusivo; fontes históricas não são completadas retrospectivamente nem substituem evidência selecionada. | Persistência de hashes, nomes de status e identidade de execução será consumida por auditorias e manuscritos posteriores; falhas de proveniência mantêm o pacote bloqueado. | active | 2026-11-04 |
 | AD-025 | KNN exato do notebook 06 usa blocos limitados pelo workspace configurável (`LATENT_KNN_WORKSPACE_MB`, padrão 1024 MiB), desempate por menor índice original e protocolo `c08_tiled_cosine_v1`; auditoria `c08_knn_audit_v1` guarda hashes/contagens no JSON e vizinhos por consulta em Parquet, vinculados ao embedding test. | Evita a matriz de similaridade contra toda a referência e JSON com milhões de IDs, preservando `k=5`, cosseno e split 80/20; o limite cobre tensores explícitos, não RSS/VRAM total. O notebook passa o dispositivo efetivo e mantém amostras Silhouette/UMAP independentes. | active | 2026-11-04 |
+| AD-026 | Retomada do notebook 06 usa `c09_latent_resume_v1`, fontes somente para leitura e namespace exclusivo por execução; pares de embeddings são validados por identidade/hash e etapas completas por dependências, código, configuração e SHA-256. A inicialização da sonda passa a ser explícita antes da construção, identificada como `c09_seeded_probe_init_v1`, distinta da inicialização histórica dependente do RNG global. | Permite reaproveitar embeddings históricos válidos sem alterar o hash de `eval/latent.py`; saídas legadas sem registro completo não são promovidas a etapas concluídas. Descarte não exclui arquivos de origem. | active | 2026-11-05 |
 
 ## Handoff
-**Feature**: c08-knn-bounded-workspace
-**Where**: C1–C13 implementados; verificação independente PASS (perfil light, gate com 0 erros/avisos), 62 testes locais relevantes e smoke sintético concluídos.
-**In progress**: validação empírica remota ainda não executada.
-**Next step**: rodar notebook 06 no cluster com dados e checkpoints canônicos, comparar métricas e comportamento de memória antes de afirmar reprodução científica.
+**Feature**: c09-latent-resume-validated
+**Where**: reutilização e progresso por etapa implementados; provas locais de retomada, corrupção, falha parcial e isolamento executadas.
+**In progress**: verificação independente light após commit da implementação.
+**Next step**: concluir verificação e executar notebook 06 no cluster com dados e checkpoints canônicos; comparar a auditoria da sonda com inicialização identificada antes de afirmar equivalência histórica.
 **Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
-**Uncommitted**: nenhum arquivo de implementação C08; artefatos locais preexistentes permanecem preservados.
+**Uncommitted**: implementação/documentação/provas C09; artefatos locais preexistentes permanecem fora do commit.
 **Branch**: main
