@@ -110,6 +110,8 @@ class PairedUMAPTests(unittest.TestCase):
 
     def test_coverage_and_balanced_quotas(self):
         before = self.labels[MODEL_NAMES[0]].copy()
+        all_labels_before = {name: values.copy() for name, values in self.labels.items()}
+        all_ids_before = {name: values.copy() for name, values in self.ids.items()}
         sample = self.sample()
         self.assertEqual(sample.audit['population_available'], 22)
         self.assertEqual(sample.audit['eligible_count'], 20)
@@ -122,6 +124,9 @@ class PairedUMAPTests(unittest.TestCase):
         limited = select_paired_sample(self.labels, self.ids, self.genera, ProjectionConfig(max_samples=7, max_genera=2))
         self.assertLessEqual(len(limited.frame), 7)
         self.assertLessEqual(limited.frame['Genus'].nunique(), 2)
+        for name in MODEL_NAMES:
+            np.testing.assert_array_equal(self.labels[name], all_labels_before[name])
+            np.testing.assert_array_equal(self.ids[name], all_ids_before[name])
 
     def test_permuted_models_project_identical_rows(self):
         original = self.sample().frame
