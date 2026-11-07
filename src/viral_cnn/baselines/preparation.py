@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 import numpy as np
 import pandas as pd
 
-from viral_cnn.baselines.overlap import audit_exact_overlap, canonical_sequence_hash
+from viral_cnn.baselines.overlap import canonical_sequence_hash
 from viral_cnn.utils.logging_utils import log_artifact_path
 
 BASELINE_PROTOCOL = "c03_paired_v1"
@@ -126,10 +127,32 @@ def inventory_inputs(train_path: Path, test_path: Path, methods: Sequence[str]) 
 
 
 def _sequence_column(frame: pd.DataFrame) -> str:
-    for name in ("sequence", "sequence_padded", "padded_Representation"):
+    # Match the historical benchmark's source field when both raw and padded
+    # representations are present in the same Parquet shard.
+    for name in ("sequence_padded", "padded_Representation", "sequence"):
         if name in frame.columns:
             return name
     raise KeyError("Input table needs a sequence, sequence_padded, or padded_Representation column")
+
+
+def _normalize_fragment(value: Any) -> str | None:
+    """Use the historical <=512-bp representation for tools and CNNs.
+
+    Trailing underscores are padding; internal underscores encode unknown bases.
+    Empty/all-unknown rows have no usable nucleotides and are excluded explicitly.
+    """
+    if value is None or pd.isna(value):
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"C03 sequence must be textual, got {type(value).__name__}")
+    sequence = value.upper().rstrip("_").replace("_", "N")
+    if not sequence:
+        return None
+    if len(sequence) > 512 or re.fullmatch(r"[ACGTN]+", sequence) is None:
+        raise ValueError(f"C03 sequence must be 1..512 A/C/G/T/N bases after padding normalization: {sequence[:60]!r} (length={len(sequence)})")
+    if not any(base in "ACGT" for base in sequence):
+        return None
+    return sequence
 
 
 def _priority(query_id: str, seed: int) -> str:
@@ -177,8 +200,14 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
     if seed != 42 or per_species != 20:
         # Other values are allowed for explicit sensitivity scenarios, but must be named in output.
         pass
+    if tool_sequence_policy != "historical_padding_to_N_v1":
+        raise ValueError(f"Unsupported explicit tool sequence policy: {tool_sequence_policy}")
     output_dir.mkdir(parents=True, exist_ok=False)
-    train, test = _read_table(train_path), _read_table(test_path)
+    # Parquet shards may preserve an index starting at zero in every shard.
+    # The export records source row ordinals, so use a contiguous positional
+    # index before filtering and assigning normalized sequence values.
+    train = _read_table(train_path).reset_index(drop=True)
+    test = _read_table(test_path).reset_index(drop=True)
     if class_order_path is None:
         class_order_path = Path(__file__).resolve().parents[3] / "dataset_kraken/species_name_ids.csv"
     log_artifact_path("Species class-order mapping", class_order_path)
@@ -187,10 +216,13 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
         raise ValueError(f"Species class-order mapping must contain ordered IDs 1..13683: {class_order_path}")
     class_order_sha256 = hashlib.sha256("\n".join(class_order["species"].astype(str)).encode()).hexdigest()
     train_seq_col, test_seq_col = _sequence_column(train), _sequence_column(test)
-    for split_name, frame, column in (("train", train, train_seq_col), ("test", test, test_seq_col)):
-        lengths = frame[column].dropna().astype(str).str.len()
-        if not lengths.eq(512).all():
-            raise ValueError(f"{split_name} C03 inputs must be fixed 512-character fragments; observed lengths {sorted(lengths.unique().tolist())[:10]}")
+    train_clean = train[train_seq_col].map(_normalize_fragment)
+    test_clean = test[test_seq_col].map(_normalize_fragment)
+    train_excluded = int(train_clean.isna().sum())
+    test_excluded = int(test_clean.isna().sum())
+    if train_excluded == len(train) or test_excluded == len(test):
+        raise ValueError("No usable A/C/G/T fragments in C03 train or test partition")
+    print(f"[C03] Normalized {train_seq_col} (train) and {test_seq_col} (test) to 1..512 A/C/G/T/N bases; excluded no-ACGT rows: train={train_excluded}, test={test_excluded}")
     if "label" not in test or "label" not in train:
         raise KeyError("Train and test inputs must contain canonical zero-based label")
     for split_name, frame in (("train", train), ("test", test)):
@@ -201,46 +233,48 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
     if "query_id" not in test:
         test = test.copy()
         test["query_id"] = [
-            hashlib.sha256(f"{test_path.name}:{i}:{test.iloc[i]['label']}:{canonical_sequence_hash(str(test.iloc[i][test_seq_col]))}".encode()).hexdigest()
-            for i in range(len(test))
+            hashlib.sha256(f"{test_path.name}:{i}:{label}:{canonical_sequence_hash(sequence or '')}".encode()).hexdigest()
+            for i, (label, sequence) in enumerate(zip(test["label"], test_clean))
         ]
     test["query_id"] = test["query_id"].astype("string")
     if test["query_id"].isna().any() or not test["query_id"].is_unique or test["query_id"].str.strip().eq("").any() or test["query_id"].str.contains(r"\s", regex=True).any():
         raise ValueError("Test query_id values must be non-null, unique, nonempty, and whitespace-free for FASTA identity")
     test = test.copy()
     test["_priority"] = test["query_id"].astype(str).map(lambda q: _priority(q, seed))
-    eligible = test[test[test_seq_col].notna() & test["label"].notna()].copy()
+    eligible = test.loc[test_clean.notna()].copy()
+    eligible[test_seq_col] = test_clean.loc[eligible.index]
     eligible["_source_row_ordinal"] = eligible.index.to_numpy(dtype=np.int64)
     selected = eligible.sort_values(["label", "_priority", "query_id"]).groupby("label", sort=True).head(per_species)
     selected = selected.sort_values(["label", "_priority", "query_id"]).drop(columns="_priority").reset_index(drop=True)
-    train_sequences = train[train_seq_col].dropna().astype(str).tolist()
-    overlap, _ = audit_exact_overlap(selected.rename(columns={test_seq_col: "sequence"}), train_sequences)
-    truth = selected[["query_id", "label"]].copy()
-    truth["query_id"] = truth["query_id"].astype(str)
-    truth = truth.merge(overlap[["query_id", "train_count", "has_overlap"]], on="query_id", validate="one_to_one")
-    truth["genome_in_reference_database"] = pd.NA
-    truth.to_csv(output_dir / "exact_overlap.csv", index=False)
-    (output_dir / "queries_clean.csv").write_text(selected[["query_id", "label", test_seq_col]].rename(columns={test_seq_col:"sequence"}).to_csv(index=False), encoding="utf-8")
-    identity = selected[["query_id", "label", test_seq_col, "_source_row_ordinal"]].copy().rename(columns={test_seq_col: "sequence", "_source_row_ordinal": "source_row_ordinal"})
-    identity["sequence_sha256"] = identity["sequence"].astype(str).map(lambda value: hashlib.sha256(value.upper().encode("ascii")).hexdigest())
-    identity.drop(columns="sequence").to_csv(output_dir / "query_identity.csv", index=False)
-    if tool_sequence_policy != "historical_padding_to_N_v1":
-        raise ValueError(f"Unsupported explicit tool sequence policy: {tool_sequence_policy}")
+    selected_hashes = selected[test_seq_col].map(canonical_sequence_hash)
+    match_counts = dict.fromkeys(selected_hashes, 0)
     reference_dir = output_dir / "references"
     reference_dir.mkdir()
     blast_fasta = reference_dir / "train_blast.fasta"
     kraken_fasta = reference_dir / "train_kraken.fasta"
     nodes_path = reference_dir / "nodes.dmp"
     names_path = reference_dir / "names.dmp"
+    train_exported = 0
     with blast_fasta.open("w", encoding="ascii") as blast_handle, kraken_fasta.open("w", encoding="ascii") as kraken_handle:
-        for ordinal, (_, ref) in enumerate(train.iterrows()):
-            if pd.isna(ref[train_seq_col]) or pd.isna(ref["label"]):
+        for ordinal, (sequence, label) in enumerate(zip(train_clean, train["label"])):
+            if sequence is None:
                 continue
-            raw = str(ref[train_seq_col]).upper()
-            sequence = raw.rstrip("_").replace("_", "N")
-            label = int(ref["label"])
-            blast_handle.write(f">train_{ordinal}_label_{label}\n{sequence}\n")
-            kraken_handle.write(f">train_{ordinal}|kraken:taxid|{label + 2}\n{sequence}\n")
+            digest = canonical_sequence_hash(sequence)
+            if digest in match_counts:
+                match_counts[digest] += 1
+            blast_handle.write(f">train_{ordinal}_label_{int(label)}\n{sequence}\n")
+            kraken_handle.write(f">train_{ordinal}|kraken:taxid|{int(label) + 2}\n{sequence}\n")
+            train_exported += 1
+    truth = selected[["query_id", "label"]].copy()
+    truth["query_id"] = truth["query_id"].astype(str)
+    truth["train_count"] = selected_hashes.map(match_counts).to_numpy(dtype=np.int64)
+    truth["has_overlap"] = truth["train_count"].gt(0)
+    truth["genome_in_reference_database"] = pd.NA
+    truth.to_csv(output_dir / "exact_overlap.csv", index=False)
+    (output_dir / "queries_clean.csv").write_text(selected[["query_id", "label", test_seq_col]].rename(columns={test_seq_col:"sequence"}).to_csv(index=False), encoding="utf-8")
+    identity = selected[["query_id", "label", test_seq_col, "_source_row_ordinal"]].copy().rename(columns={test_seq_col: "sequence", "_source_row_ordinal": "source_row_ordinal"})
+    identity["sequence_sha256"] = identity["sequence"].astype(str).map(lambda value: hashlib.sha256(value.upper().encode("ascii")).hexdigest())
+    identity.drop(columns="sequence").to_csv(output_dir / "query_identity.csv", index=False)
     with nodes_path.open("w", encoding="ascii") as nodes_handle, names_path.open("w", encoding="utf-8") as names_handle:
         nodes_handle.write("1\t|\t1\t|\tno rank\t|\t\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t\t|\n")
         for label, species_name in enumerate(class_order["species"].astype(str)):
@@ -252,7 +286,9 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
         "baseline_protocol": BASELINE_PROTOCOL, "reference_taxonomy": "Kraken2-flat",
         "custom_taxid_formula": "label + 2", "class_order_sha256": class_order_sha256,
         "train_path": str(train_path.resolve()), "train_sha256": sha256_file(train_path),
-        "source_rows": len(train), "sequence_policy": tool_sequence_policy,
+        "source_rows": len(train), "reference_rows_exported": train_exported,
+        "excluded_train_rows_no_acgt": train_excluded,
+        "sequence_policy": tool_sequence_policy,
         "kraken_reference_fasta": str(kraken_fasta.resolve()), "blast_reference_fasta": str(blast_fasta.resolve()),
         "nodes_dmp": str(nodes_path.resolve()), "names_dmp": str(names_path.resolve()),
         "sha256": {p.name: sha256_file(p) for p in (kraken_fasta, blast_fasta, nodes_path, names_path)},
@@ -295,11 +331,15 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
     run_manifest = {"baseline_protocol": BASELINE_PROTOCOL, "seed": seed, "per_species": per_species,
                     "train_path": str(train_path.resolve()), "train_sha256": sha256_file(train_path),
                     "test_path": str(test_path.resolve()), "test_sha256": sha256_file(test_path),
-                    "train_rows": len(train), "test_rows": len(test), "eligible_test_rows": len(eligible),
+                    "train_rows": len(train), "train_rows_exported": train_exported,
+                    "train_rows_excluded_no_acgt": train_excluded,
+                    "test_rows": len(test), "eligible_test_rows": len(eligible),
+                    "sequence_columns": {"train": train_seq_col, "test": test_seq_col},
+                    "fragment_policy": "historical_padding_to_N_v1; 1..512 bases; exclude no-ACGT rows",
                     "class_order_path": str(class_order_path.resolve()), "class_order_sha256": class_order_sha256,
                     "selected_queries": len(selected), "selected_per_species_cap": per_species,
                     "excluded_rows": int(len(test) - len(eligible)),
-                    "exclusions_by_reason": {"missing_sequence_or_label": int(len(test) - len(eligible))},
+                    "exclusions_by_reason": {"missing_or_no_acgt_sequence": test_excluded},
                     "eligible_population_by_species": {str(int(k)): int(v) for k, v in eligible.groupby("label").size().items()},
                     "selected_by_species": {str(int(k)): int(v) for k, v in selected.groupby("label").size().items()},
                     "query_identity_path": str((output_dir / "query_identity.csv").resolve()),

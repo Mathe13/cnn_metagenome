@@ -38,8 +38,8 @@ DEFAULT_METHOD_ALIASES: Dict[str, List[str]] = {
 
 
 def reverse_complement(seq: str) -> str:
-    """Return the reverse complement for canonical A/C/G/T sequences."""
-    return seq.translate(str.maketrans("ACGT", "TGCA"))[::-1]
+    """Return the reverse complement for A/C/G/T/N benchmark sequences."""
+    return seq.translate(str.maketrans("ACGTN", "TGCAN"))[::-1]
 
 
 def canonical_sequence_hash(seq: str) -> str:
