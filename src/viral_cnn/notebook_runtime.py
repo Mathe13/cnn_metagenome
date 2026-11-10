@@ -339,6 +339,11 @@ def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_t
     """Inspect declared notebook prerequisites using only filesystem metadata."""
     if notebook_id not in NOTEBOOK_REQUIREMENTS:
         raise ValueError(f"Unknown notebook_id {notebook_id!r}; choose one of {sorted(NOTEBOOK_REQUIREMENTS)}")
+    if notebook_id == "short/09" and not smoke_test:
+        from viral_cnn.baselines.overlap import inspect_c03_package
+        topology = JupyterHubDataTopology(data_root)
+        source = os.getenv("C03_PREPARED_DIR", str(topology.paths["short"]["kraken_blast_dir"]))
+        return {"notebook_id": notebook_id, "is_smoke_test": False, **inspect_c03_package(source)}
     topology = JupyterHubDataTopology(data_root)
     results = []
     for spec in NOTEBOOK_REQUIREMENTS[notebook_id]:

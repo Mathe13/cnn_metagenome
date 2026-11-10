@@ -338,6 +338,9 @@ def load_prepared_baseline_benchmark(
                 value = manifest.get(field)
                 if value is None or value == "" or value == "unknown" or value == [] or value == {}:
                     raise ValueError(f"Empirical manifest field {field} is unknown/empty for {method}/{noise}")
+            expected_policy = {"Kraken2-flat": "Kraken U/root => -1", "BLASTN": "completed BLASTN with no hit => -1"}.get(method)
+            if expected_policy and manifest["abstention_policy"] != expected_policy:
+                raise ValueError(f"Incompatible abstention policy for {method}/{noise}")
             reference_info = manifest["reference"]
             if not isinstance(reference_info, dict) or not reference_info.get("path") or not reference_info.get("sha256"):
                 raise ValueError(f"Empirical reference must include path and SHA-256: {method}/{noise}")
@@ -362,6 +365,8 @@ def load_prepared_baseline_benchmark(
                     source = Path(source_manifest[field])
                     _verify_path_hash(source, source_manifest.get("sha256", {}).get(filename), reference_checks, context="Reference source artifact")
             db_info = reference_info.get("database_build_manifest")
+            if method in {"Kraken2-flat", "BLASTN"} and not isinstance(db_info, dict):
+                raise ValueError(f"Missing database_build_manifest for {method}/{noise}")
             if db_info:
                 db_path = Path(str(db_info.get("path", "")))
                 _verify_path_hash(db_path, db_info.get("sha256"), reference_checks, context="Database build manifest")
@@ -625,3 +630,32 @@ def load_prepared_baseline_benchmark(
         method_manifests=manifest_records,
     )
 
+
+
+def inspect_c03_package(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
+    """Validate all 35 C03 conditions without executing a model or search tool.
+
+    Reads materialized tables and hashes; unlike the generic preflight this is
+    not metadata-only. READY certifies structural integrity, never reproduction.
+    """
+    root = Path(benchmark_dir).expanduser().resolve()
+    report: Dict[str, Any] = {"path": str(root), "status": "BLOCKED",
+        "scientific_reproduction_certified": False, "inspection": "c03_content_and_hashes"}
+    try:
+        prep_path = root / "preparation_manifest.json"
+        log_artifact_path("C03 preparation manifest", prep_path)
+        prep = json.loads(prep_path.read_text())
+        if prep.get("status") != "COMPLETE":
+            raise ValueError("C03 preparation manifest requires explicit status COMPLETE")
+        if prep.get("is_smoke_test") is not False:
+            raise ValueError("Synthetic preparation is not empirical C03")
+        artifacts = load_prepared_baseline_benchmark(root)
+        report.update(status="READY", n=len(artifacts.audit_df),
+            preparation_manifest={"path": str(prep_path), "sha256": _sha256_path(prep_path)},
+            method_condition_count=len(artifacts.method_manifests or []),
+            method_manifests=artifacts.method_manifests)
+        if report["method_condition_count"] != 35:
+            raise ValueError("Expected 35 complete C03 method conditions")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        report.update(status="BLOCKED", error=str(exc))
+    return report

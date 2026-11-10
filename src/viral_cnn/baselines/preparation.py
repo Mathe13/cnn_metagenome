@@ -328,7 +328,7 @@ def prepare_queries(train_path: Path, test_path: Path, output_dir: Path, *, seed
         manifest_path = output_dir / f"query_manifest_{rate_tag}.json"
         manifest_path.write_text(json.dumps(qmanifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         condition_records.append({"noise_rate": rate, "query_manifest": str(manifest_path), "query_content_sha256": qmanifest["query_content_sha256"]})
-    run_manifest = {"baseline_protocol": BASELINE_PROTOCOL, "seed": seed, "per_species": per_species,
+    run_manifest = {"status": "COMPLETE", "baseline_protocol": BASELINE_PROTOCOL, "seed": seed, "per_species": per_species,
                     "train_path": str(train_path.resolve()), "train_sha256": sha256_file(train_path),
                     "test_path": str(test_path.resolve()), "test_sha256": sha256_file(test_path),
                     "train_rows": len(train), "train_rows_exported": train_exported,

@@ -299,7 +299,13 @@ def inspect_run_stage(plan: dict[str, Any], notebook_id: str) -> dict[str, Any]:
                 raise ValueError('manifest incomplete: explicit COMPLETE required')
             if not plan['is_smoke_test'] and manifest.get('is_smoke_test') is not False:
                 raise ValueError('synthetic or unknown manifest mode')
-            result.update(status='READY', detail='manifest metadata verified; specialized checks still required',
+            if notebook_id == 'short/09' and dep.get('source') == 'c03' and not plan['is_smoke_test']:
+                from viral_cnn.baselines.overlap import inspect_c03_package
+                specialized = inspect_c03_package(path.parent)
+                result['c03_inspection'] = specialized
+                if specialized['status'] != 'READY':
+                    raise ValueError(specialized.get('error', 'C03 package blocked'))
+            result.update(status='READY', detail='manifest verified; see specialized inspection when present',
                           observed_sha256=actual_hash)
         except (OSError, ValueError, TypeError) as exc:
             result['detail'] = str(exc)
