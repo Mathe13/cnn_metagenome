@@ -1,0 +1,242 @@
+# M00 only inspects and reserves. Edit explicit input selections before use.
+# Relative manifest/input paths use DATA_ROOT; reference_roots use project root.
+protocol_id: m00_run_plan_v1
+data_root: .
+seed: 42
+population_id: unknown
+split_id: unknown
+hash_max_bytes: 16777216
+reference_roots:
+- paper
+- results_reproduction
+- configs/models.yaml
+- configs/default_species.yaml
+external_reference_roots: []
+resources:
+  device: unknown
+  memory_gb: unknown
+  storage_gb: unknown
+stages:
+- notebook_id: short/01
+  manifest_name: manifest.json
+  requirements:
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: train
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: validation
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: test
+    columns:
+    - sequence_padded
+    - label
+  - topology: checkpoints/resnet_clean_species
+    kind: file
+  - topology: checkpoints/resnet_noise_species
+    kind: file
+  - topology: checkpoints/convnext_zero_species
+    kind: file
+  - topology: checkpoints/convnext_transfer_species
+    kind: file
+  - topology: checkpoints/convnext_noise_species
+    kind: file
+  - topology: short/species_csv
+    kind: csv
+    columns:
+    - id
+    - species
+- notebook_id: short/02
+  manifest_name: manifest.json
+  requirements:
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: train
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: validation
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: test
+    columns:
+    - sequence_padded
+    - label
+  - topology: checkpoints/resnet_clean_species
+    kind: file
+  - topology: checkpoints/resnet_noise_species
+    kind: file
+  - topology: checkpoints/convnext_zero_species
+    kind: file
+  - topology: checkpoints/convnext_transfer_species
+    kind: file
+  - topology: checkpoints/convnext_noise_species
+    kind: file
+  - topology: short/species_csv
+    kind: csv
+    columns:
+    - id
+    - species
+  - topology: short/hybrid_taxonomy_parquet
+    kind: parquet
+    columns:
+    - model_label
+    - Genus
+    - Order
+- notebook_id: short/03
+  manifest_name: manifest.json
+  action: skip
+  reason: Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela
+    rodada padrão.
+- notebook_id: short/04
+  manifest_name: manifest.json
+  action: skip
+  reason: Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela
+    rodada padrão.
+- notebook_id: short/05
+  manifest_name: manifest.json
+  requirements:
+  - topology: short/ictv_master
+    kind: xlsx
+    sheets:
+    - MSL
+    - Taxa Renamed or Abolished
+  - topology: short/species_csv
+    kind: csv
+    columns:
+    - id
+    - species
+- notebook_id: short/06
+  manifest_name: manifest.json
+  requirements:
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: train
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: validation
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: test
+    columns:
+    - sequence_padded
+    - label
+  - topology: checkpoints/resnet_clean_species
+    kind: file
+  - topology: checkpoints/resnet_noise_species
+    kind: file
+  - topology: checkpoints/convnext_zero_species
+    kind: file
+  - topology: checkpoints/convnext_transfer_species
+    kind: file
+  - topology: checkpoints/convnext_noise_species
+    kind: file
+  - topology: short/species_csv
+    kind: csv
+    columns:
+    - id
+    - species
+  - topology: short/hybrid_taxonomy_parquet
+    kind: parquet
+    columns:
+    - model_label
+    - Genus
+    - Order
+- notebook_id: short/07
+  manifest_name: manifest_07_motifs.json
+  requirements:
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: train
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: validation
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: test
+    columns:
+    - sequence_padded
+    - label
+  - topology: checkpoints/resnet_clean_species
+    kind: file
+  - topology: checkpoints/resnet_noise_species
+    kind: file
+  - topology: checkpoints/convnext_zero_species
+    kind: file
+  - topology: checkpoints/convnext_transfer_species
+    kind: file
+  - topology: checkpoints/convnext_noise_species
+    kind: file
+  - topology: short/species_csv
+    kind: csv
+    columns:
+    - id
+    - species
+- notebook_id: short/08
+  manifest_name: manifest_08_triplets.json
+  dependencies:
+  - source: short/07
+    kind: planned
+- notebook_id: short/09
+  manifest_name: manifest_09_baselines.json
+  dependencies:
+  - source: c03
+    kind: external
+    manifest: cnn_kraken/benchmark_kraken_blast_20_per_species/preparation_manifest.json
+- notebook_id: short/10
+  manifest_name: manifest.json
+- notebook_id: short/11
+  manifest_name: manifest.json
+- notebook_id: short/06b
+  manifest_name: manifest.json
+  dependencies:
+  - source: short/06
+    kind: planned
+  requirements:
+  - topology: short/hybrid_taxonomy_parquet
+    kind: parquet
+    columns:
+    - model_label
+    - Genus
+    - Order
+- notebook_id: long/01
+  manifest_name: manifest_01_ncbi_prep.json
+- notebook_id: long/02
+  manifest_name: manifest_02_voter_inference.json
+  dependencies:
+  - source: long/01
+    kind: planned
+- notebook_id: long/03
+  manifest_name: manifest_03_voter_compare.json
+  dependencies:
+  - source: long/02
+    kind: planned
+- notebook_id: long/04
+  manifest_name: manifest_04_long_motifs.json
+  dependencies:
+  - source: long/03
+    kind: planned

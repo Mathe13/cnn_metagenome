@@ -32,11 +32,13 @@
 | AD-026 | Retomada do notebook 06 usa `c09_latent_resume_v1`, fontes somente para leitura e namespace exclusivo por execução; pares de embeddings são validados por identidade/hash e etapas completas por dependências, código, configuração e SHA-256. A inicialização da sonda passa a ser explícita antes da construção, identificada como `c09_seeded_probe_init_v1`, distinta da inicialização histórica dependente do RNG global. | Permite reaproveitar embeddings históricos válidos sem alterar o hash de `eval/latent.py`; saídas legadas sem registro completo não são promovidas a etapas concluídas. Descarte não exclui arquivos de origem. | active | 2026-11-05 |
 | AD-027 | Visualização do notebook 06 usa `c10_paired_umap_v1`: até 100 fragmentos/10 gêneros por padrão, quotas sem reposição e mesmos IDs/labels alinhados nos cinco modelos, parâmetros comuns e projeções independentes. CSVs, seleção, painel e metadados identificam UMAP ou fallback PCA; progresso por variante conserva validação C09. | Substitui a seleção de primeiras 100 linhas de ConvNeXt_F por população exploratória pareada, sem alterar métricas quantitativas ou o hash de `eval/latent.py`. Eixos 2D não são alinhados nem evidência filogenética; a transição de código pode invalidar caches não-embedding pelo hash global. | active | 2026-11-05 |
 
+| AD-028 | M00 usa `m00_run_plan_v1`: inventário limitado por tamanho e plano explícito por rodada/etapa, com dependências planned/external, seleção externa por SHA-256 e destinos exclusivos. Dependência futura/incompleta/sintética no modo empírico bloqueia prontidão; retomada 06/06b exige validação C09 própria. | Preserva referências e separa prontidão administrativa de reprodução científica; M00 não migra notebooks nem substitui validadores C03/C09/C06. | active | 2026-11-09 |
+
 ## Handoff
-**Feature**: c10-paired-umap-all-models
-**Where**: C1–C17 comprovados por Verifier independente no commit 38518c7, perfil light PASS e gate sem erros/avisos. Baterias independentes de 93 testes latentes e 9 do notebook 06 verdes. Lacuna inicial da prova de preservação de IDs/labels corrigida para as cinco variantes, sem alteração funcional.
-**In progress**: validação empírica remota e numérica com UMAP real permanecem pendentes; fixtures CPU e fallback PCA real foram exercitados localmente.
-**Next step**: atualizar notebook e módulo `paired_umap.py` no cluster, executar com entradas canônicas e inspecionar `umap_comparison.png`/JSON; comparar amostras e proveniência antes de afirmar reprodução da Figura 2.
-**Blockers**: `/home/mlima/workspace`, dados ICTV e checkpoints canônicos não estão disponíveis nesta sessão.
-**Uncommitted**: nenhum arquivo de implementação C10; relatório independente e lição L-007 acompanham o fechamento. Artefatos locais preexistentes permanecem fora do commit.
+**Feature**: m00-reproduction-run-plan
+**Where**: plano aprovado pelo usuário; 18 checks definidos antes do código, perfil light. Implementação com 91 testes locais verdes (31 M00/runtime e 60 C02/C06/C09); base da feature `9fdaefe9860f75293ce90e38daf6932335026b0f`.
+**In progress**: commit local da M00 e Verifier independente obrigatório após o commit.
+**Next step**: concluir verificação M00 e depois implementar M01, mantendo as correções 05/09 e adoção dos namespaces no escopo das respectivas fases.
+**Blockers**: preflight remoto e execução empírica pendentes; Parquets/checkpoints canônicos do cluster não estão montados. Planos BLOCKED são diagnóstico, não reprodução.
+**Uncommitted**: arquivos M00 e artefatos preexistentes não relacionados; não adicionar saídas históricas ao commit.
 **Branch**: main

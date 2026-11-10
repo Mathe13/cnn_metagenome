@@ -373,9 +373,15 @@ _reservation_lock = threading.Lock()
 
 def reserve_run_directory(project_root: Union[str, Path], run_id: str, notebook_id: str) -> Path:
     """Atomically reserve a unique per-run notebook output directory."""
-    if not run_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id):
+    if not run_id or run_id in (".", "..") or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id):
         raise ValueError("run_id may contain only letters, digits, dot, underscore, and hyphen")
-    target = Path(project_root).resolve() / "results_reproduction" / "runs" / run_id / notebook_id
+    step = Path(notebook_id)
+    if not notebook_id or step.is_absolute() or any(p in (".", "..") for p in notebook_id.split("/")):
+        raise ValueError("notebook_id must be a relative path without traversal")
+    base = Path(project_root).resolve() / "results_reproduction" / "runs"
+    target = base / run_id / step
+    if not target.resolve().is_relative_to(base.resolve() / run_id):
+        raise ValueError("run output escapes its reserved namespace")
     target.parent.mkdir(parents=True, exist_ok=True)
     with _reservation_lock:
         try:

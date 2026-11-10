@@ -204,6 +204,57 @@ To decouple lightweight code development from multi-gigabyte genomic datasets an
 
 ### Notebook preflight and run manifests
 
+M00 prepara uma rodada sem executar notebooks. Copie e ajuste
+`configs/reproduction_m00.yaml`: selecione explicitamente o manifesto C03,
+raízes externas, entradas, população/split e recursos conhecidos. Caminhos de
+entradas e manifestos relativos usam `DATA_ROOT`; `reference_roots` usa a raiz
+do projeto. Valores não comprovados permanecem `unknown`. O inventário calcula
+SHA-256 integral até 16 MiB por arquivo; arquivos maiores recebem `skipped_size`,
+sem cópia de binários. Links simbólicos não são percorridos. Inclua raízes
+externas conscientemente para limitar o custo da enumeração.
+
+```bash
+.venv/bin/python3 scripts/plan_reproduction_run.py \
+  --config configs/reproduction_m00.yaml --data-root "$DATA_ROOT" \
+  --run-id rodada-m00-001
+.venv/bin/python3 scripts/preflight_notebook.py short/08 \
+  --run-plan results_reproduction/runs/rodada-m00-001/m00/run_plan.json
+```
+
+O primeiro comando reserva namespaces novos e salva `reference_inventory.csv`,
+`run_plan.json` e `preflight_report.json`. Código 2 indica impedimentos descritos
+no relatório; um plano `BLOCKED` continua inspecionável. Uma colisão nunca assume
+o diretório anterior: escolha outro `--run-id`, ou omita-o para gerar um UUID.
+O preflight não executa a rodada. Dependências futuras são `planned` e impedem
+prontidão até seus manifestos existirem com status explícito `COMPLETE`; entradas
+externas são fixadas por caminho/SHA-256. Se faltavam na criação do plano, gere
+um novo plano quando estiverem disponíveis. Alterar manifesto externo invalida
+a seleção; nome/data de arquivo não são critério de escolha.
+
+`resume_manifest` em 06/06b aponta para entrada somente leitura em uma reserva
+nova e recebe `PENDING_C09`. M00 não certifica retomada: o fluxo especializado C09
+deve verificar caches/embeddings antes do uso. Os notebooks ainda precisam da
+adoção desses caminhos nas próximas fases do roadmap; o plano não corrige seus
+caminhos fixos. Os validadores completos das 35 condições C03, C09 e C06 seguem
+obrigatórios; `READY` significa apenas prontidão dos metadados declarados.
+03/04 são `skip` por padrão, com motivo, sem treinamento nem produtos sintéticos.
+
+Verificação local com fixtures, offline e sem GPU:
+
+```bash
+REMOTE_SERVER=False PYTHONPATH=src .venv/bin/python3 -m unittest \
+  tests.test_m00_run_plan tests.test_c00_preflight_manifest tests.test_notebook_runtime -v
+```
+
+Esses testes sintéticos não equivalem a preflight remoto nem a reprodução empírica.
+O preflight remoto deve ser executado no servidor com os artefatos reais antes
+da rodada integral. Checkpoints e Parquets canônicos do cluster não estão montados
+nesta cópia; os resultados do artigo não foram recalculados pela M00. A configuração
+geral (`default_species.yaml`, dropout 0,3) diverge do registro de variantes
+(`models.yaml`, 0,5/0,7): ambas ficam identificadas no inventário, sem conciliação
+silenciosa ou mudança de pesos. O inventário descreve referência histórica;
+presença e hash não a tornam evidência científica admissível.
+
 Inspect declared requirements before running a notebook (no Parquet rows, model weights, or sequences are loaded):
 ```bash
 python scripts/preflight_notebook.py short/01 --data-root "$DATA_ROOT"
