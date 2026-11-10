@@ -154,3 +154,76 @@ class M02Tests(unittest.TestCase):
     def test_c03_missing_package(self):
         r=inspect_c03_package(self.root/'absent')
         self.assertEqual(r['status'],'BLOCKED');self.assertFalse((self.root/'absent').exists())
+
+    def begin(self,stage='short/01',smoke=True,**settings):
+        from viral_cnn.m02_workflow import begin_m02
+        return begin_m02(stage,project_root=self.root,settings={'data_root':str(self.root),'is_smoke_test':smoke,**settings})
+
+    def test_source_paths_and_hashes(self):
+        p=self.root/'source.json';put(p,{'status':'COMPLETE'})
+        with patch.dict(os.environ,{'C03_PREPARED_DIR':str(self.root)}):
+            run=self.begin('short/09');self.assertEqual(run.configuration['c03_prepared_dir'],str(self.root))
+            run.complete(input_files=[p]);m=json.loads(run.manifest_path.read_text())
+            self.assertEqual(m['inputs'][0]['sha256'],sha(p));self.assertEqual(m['inputs'][0]['path'],str(p))
+
+    def test_conflicting_plan_source(self):
+        from viral_cnn.m02_workflow import begin_m02
+        output=self.root/'results_reproduction/runs/child/short/09';output.mkdir(parents=True)
+        plan={'protocol_id':'m00_run_plan_v1','schema_version':1,'parent_run_id':'parent','data_root':str(self.root),
+              'is_smoke_test':False,'seed':42,'stages':[{'notebook_id':'short/09','run_id':'child','parent_run_id':'parent',
+              'action':'run','output_dir':str(output),'manifest':str(output/'manifest_09_baselines.json'),
+              'requirements':[],'dependencies':[{'source':'c03','manifest':str(self.root/'prepared/preparation_manifest.json')}]}]}
+        path=self.root/'plan.json';put(path,plan)
+        with patch.dict(os.environ,{'C03_PREPARED_DIR':str(self.root/'different')}),self.assertRaisesRegex(ValueError,'conflict'):
+            begin_m02('short/09',project_root=self.root,run_plan=path)
+        self.assertEqual(list(output.iterdir()),[])
+
+    def test_three_notebook_reservations(self):
+        for stage in ['short/01','short/02','short/09']:
+            a=self.begin(stage);b=self.begin(stage)
+            self.assertNotEqual(a.output_dir,b.output_dir)
+            self.assertTrue(a.ctx.data_root.is_relative_to(a.output_dir))
+            self.assertNotEqual(a.ctx.data_root,self.root)
+
+    def test_collision_and_missing_inputs(self):
+        from viral_cnn.m02_workflow import begin_m02
+        a=self.begin(run_id='same');(a.output_dir/'keep').write_bytes(b'keep')
+        with self.assertRaises(FileExistsError):self.begin(run_id='same')
+        with self.assertRaises(FileNotFoundError):
+            with a.guard():a.complete(input_files=[self.root/'missing'])
+        self.assertEqual(json.loads(a.manifest_path.read_text())['status'],'FAILED')
+        self.assertEqual((a.output_dir/'keep').read_bytes(),b'keep')
+
+    def test_manifest_identity_and_lineage(self):
+        src=self.root/'source';src.write_bytes(b'input');ck=self.root/'ck';ck.write_bytes(b'weights')
+        run=self.begin(population_id='fixture-pop',split_id='fixture-split')
+        product=run.output_dir/'data.csv';product.write_bytes(b'a\n1\n')
+        run.complete(input_files=[src],checkpoints={'fixture':str(ck)})
+        m=json.loads(run.manifest_path.read_text())
+        for key in ['protocol_id','status','notebook_id','run_id','parent_run_id','is_smoke_test','population_id',
+                    'split_id','seed','git_commit','git_dirty','configuration','library_versions','inputs','checkpoints','outputs','statistical_scope']:
+            self.assertIn(key,m)
+        self.assertEqual(m['status'],'COMPLETE');self.assertEqual(m['protocol_id'],'m02_benchmark_audit_v1')
+        self.assertEqual(m['population_id'],'fixture-pop');self.assertEqual(m['split_id'],'fixture-split');self.assertEqual(m['seed'],42)
+        self.assertEqual(m['inputs'][0]['sha256'],sha(src));self.assertEqual(m['checkpoints']['fixture']['sha256'],sha(ck))
+        rec=next(r for r in m['outputs'] if r['path']==str(product));self.assertEqual(rec['sha256'],sha(product));self.assertEqual(rec['relative_path'],'data.csv')
+
+    def test_failed_run_manifest(self):
+        for stage in ['short/01','short/02','short/09']:
+            r=self.begin(stage)
+            with self.assertRaisesRegex(RuntimeError,'intentional'):
+                with r.guard():raise RuntimeError('intentional')
+            m=json.loads(r.manifest_path.read_text());self.assertEqual(m['status'],'FAILED');self.assertEqual(m['error'],'intentional')
+
+    def test_reservation_preserves_bytes(self):
+        r=self.begin(run_id='immutable');p=r.output_dir/'keep';p.write_bytes(b'previous')
+        before={str(p):p.read_bytes() for p in r.output_dir.rglob('*') if p.is_file()}
+        with self.assertRaises(FileExistsError):self.begin(run_id='immutable')
+        self.assertEqual(before,{str(p):p.read_bytes() for p in r.output_dir.rglob('*') if p.is_file()})
+
+    def test_empirical_failure_never_creates_fixtures(self):
+        before=set(self.root.rglob('*.parquet'))
+        r=self.begin(smoke=False)
+        with self.assertRaises(FileNotFoundError):
+            with r.guard():r.complete(input_files=[self.root/'missing.parquet'])
+        self.assertEqual(before,set(self.root.rglob('*.parquet')))

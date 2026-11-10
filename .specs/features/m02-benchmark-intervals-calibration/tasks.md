@@ -100,14 +100,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] Entradas explícitas/plano identificadas; conflito rejeitado; duas execuções disjuntas; colisão e falha preservam sentinelas; manifesto tem hashes reais, lineage e modo.
-- [ ] Provas C2, C3, C9–C12, C25, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 7 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Full passa; contagem real e resultado registrados antes do commit.
+- [x] Entradas explícitas/plano identificadas; conflito rejeitado; duas execuções disjuntas; colisão e falha preservam sentinelas; manifesto tem hashes reais, lineage e modo.
+- [x] Provas C2, C3, C9–C12, C25, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 7 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Full passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: integration
 **Gate**: Full
 **Commit**: `feat(m02): isolate benchmark run lifecycle and inputs`
+
+**Result**: 8 testes de ciclo/entrada passaram em 2,443 s. Snapshot de fontes e falha sem fixtures confirmados.
 
 ### T3: Resumo e curvas dos sete métodos
 
