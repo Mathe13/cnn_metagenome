@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect reproduction notebook inputs without loading dataset rows or models."""
+"""Inspect inputs; short/09 also validates C03 tables and hashes without model inference."""
 import argparse
 import json
 import os

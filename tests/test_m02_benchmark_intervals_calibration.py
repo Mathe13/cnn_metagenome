@@ -15,6 +15,8 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 torch.set_num_threads(1)
+# Initialize the CPU autograd engine before unittest emits proof lines.
+torch.tensor(1., requires_grad=True).square().backward()
 from viral_cnn.baselines.preparation import prepare_queries, bind_query_manifests, write_method_condition_manifest
 from viral_cnn.baselines.overlap import inspect_c03_package, load_prepared_baseline_benchmark
 
@@ -116,6 +118,27 @@ class M02Tests(unittest.TestCase):
             obj=json.loads(old);obj['reference'].pop('database_build_manifest');put(p,obj)
             self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED');p.write_bytes(old)
 
+        # Every one of the 35 conditions must independently block the common gate.
+        for p in sorted((out/'comparison_results').glob('manifest_*.json')):
+            original=p.read_bytes();obj=json.loads(original)
+            p.unlink();self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED');p.write_bytes(original)
+            for field,value in [('completion','FAILED'),('output_sha256','0'*64)]:
+                changed={**obj,field:value};put(p,changed)
+                with self.subTest(condition=p.name,field=field):self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED')
+                p.write_bytes(original)
+        # Both public preflight paths must reach the same guard with a pinned preparation.
+        from viral_cnn.notebook_runtime import preflight_notebook
+        from viral_cnn.run_planning import inspect_run_stage, load_run_plan
+        plan_path=self.plan_stage('short/09','preflight-parent',smoke=False,c03=out)
+        p=out/'comparison_results/manifest_BLASTN_noise_15.json';original=p.read_bytes();obj=json.loads(original);obj['completion']='RUNNING';put(p,obj)
+        with patch.dict(os.environ,{'C03_PREPARED_DIR':str(out)}):
+            self.assertEqual(preflight_notebook('short/09',self.root)['status'],'BLOCKED')
+            self.assertEqual(inspect_run_stage(load_run_plan(plan_path),'short/09')['status'],'BLOCKED')
+        p.write_bytes(original)
+        for p in [out/'preparation_manifest.json',paths[2]]:
+            original=p.read_bytes();p.write_bytes(original+b' ')
+            self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED');p.write_bytes(original)
+
     def test_c03_query_content_identity(self):
         out=self.complete();p=out/'comparison_results/predictions_BLASTN_noise_00.csv'
         mp=out/'comparison_results/manifest_BLASTN_noise_00.json';original=p.read_bytes();manifest=mp.read_bytes()
@@ -127,6 +150,15 @@ class M02Tests(unittest.TestCase):
         q=out/'queries_noise_00.csv';frame=pd.read_csv(q);frame.loc[0,'sequence']='T'*512;frame.to_csv(q,index=False)
         self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED')
 
+        # Coherent hashes and identical IDs do not permit a second noisy realization.
+        # Reuse the independently specified case, not only the stale-hash mutation above.
+        q.write_bytes((self.root/'prepared/queries_clean.csv').read_bytes())
+        # The separate case builds its own fresh namespace to avoid the earlier mutations.
+        with tempfile.TemporaryDirectory() as other:
+            original_root=self.root;self.root=Path(other)
+            try:self.test_c03_rejects_second_noise_realization()
+            finally:self.root=original_root
+
     def test_c03_classes_reference_abstention(self):
         out=self.complete();p=out/'comparison_results/manifest_BLASTN_noise_00.json';original=p.read_bytes()
         for field,value in [('class_order_sha256','f'*64),('abstention_policy','discard unclassified'),('reference',{'path':'absent','sha256':'f'*64})]:
@@ -136,6 +168,32 @@ class M02Tests(unittest.TestCase):
     def test_c03_synthetic_dependency(self):
         out=self.complete();self.mutate_manifest(out,'is_smoke_test',True)
         self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED')
+
+        # Fresh packages for each dependency role; update enclosing hashes so mode is tested.
+        for role in ['reference','nested_reference','build','preparation','query']:
+            with tempfile.TemporaryDirectory() as tmp:
+                out=package(Path(tmp));manifests=sorted((out/'comparison_results').glob('manifest_*.json'))
+                prep=json.loads((out/'preparation_manifest.json').read_text());ref=Path(prep['reference_manifest'])
+                db=ref.parent/'database_build_manifest.json'
+                if role=='reference':
+                    data=json.loads(ref.read_text());data['is_smoke_test']=True;put(ref,data)
+                elif role=='nested_reference':
+                    data=json.loads(ref.read_text());data['is_smoke_test']=True
+                    nested=ref.parent/'nested.json';put(nested,data)
+                    wrapper={**json.loads(ref.read_text()),'reference_manifest':str(nested),'reference_manifest_sha256':sha(nested)};put(ref,wrapper)
+                elif role=='build':
+                    data=json.loads(db.read_text());data['is_smoke_test']=True;put(db,data)
+                elif role=='preparation':
+                    prep['is_smoke_test']=True;put(out/'preparation_manifest.json',prep);bind_query_manifests(out)
+                elif role=='query':
+                    q=out/'query_manifest_noise_05.json';data=json.loads(q.read_text());data['is_smoke_test']=True;put(q,data)
+                if role in ('reference','nested_reference'):
+                    data=json.loads(db.read_text());data['reference_manifest_sha256']=sha(ref);put(db,data)
+                for mp in manifests:
+                    obj=json.loads(mp.read_text());obj['reference']['sha256']=sha(ref)
+                    if obj['reference'].get('database_build_manifest'):obj['reference']['database_build_manifest']['sha256']=sha(db)
+                    qp=Path(obj['query_manifest']['path']);obj['query_manifest']['sha256']=sha(qp);put(mp,obj)
+                with self.subTest(role=role):self.assertEqual(inspect_c03_package(out)['status'],'BLOCKED')
 
     def test_complete_with_corrupted_product(self):
         out=self.complete();p=out/'comparison_results/predictions_BLASTN_noise_00.csv'
@@ -171,6 +229,21 @@ class M02Tests(unittest.TestCase):
             run.complete(input_files=[p]);m=json.loads(run.manifest_path.read_text())
             self.assertEqual(m['inputs'][0]['sha256'],sha(p));self.assertEqual(m['inputs'][0]['path'],str(p))
 
+        from viral_cnn.notebook_runtime import preflight_notebook
+        from viral_cnn.m02_workflow import begin_m02
+        out=self.complete()
+        with patch.dict(os.environ,{'C03_PREPARED_DIR':'prepared','LOG_PATH':'true'}), contextlib.redirect_stderr(io.StringIO()) as log:
+            pre=preflight_notebook('short/09',self.root)
+            selected=begin_m02('short/09',project_root=self.root,settings={'data_root':str(self.root)})
+            self.assertEqual(pre['status'],'READY');self.assertEqual(pre['path'],str(out))
+            self.assertEqual(selected.configuration['c03_prepared_dir'],str(out))
+            self.assertIn(str(out),log.getvalue());self.assertIn(sha(out/'preparation_manifest.json'),log.getvalue())
+        plan_path=self.plan_stage('short/09','selected-parent',smoke=False,c03=out)
+        with patch.dict(os.environ,{'RUN_PLAN':str(plan_path)}):
+            ns=self.execute09(out,stop=1)
+            self.assertEqual(ns['run'].configuration['c03_prepared_dir'],str(out))
+            self.assertEqual(ns['run'].configuration['run_plan_identity']['sha256'],sha(plan_path))
+
     def test_conflicting_plan_source(self):
         from viral_cnn.m02_workflow import begin_m02
         output=self.root/'results_reproduction/runs/child/short/09';output.mkdir(parents=True)
@@ -190,6 +263,17 @@ class M02Tests(unittest.TestCase):
             self.assertTrue(a.ctx.data_root.is_relative_to(a.output_dir))
             self.assertNotEqual(a.ctx.data_root,self.root)
 
+        for stem in ['01','02','09']:
+            first=self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            second=self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            self.assertNotEqual(first['run'].output_dir,second['run'].output_dir)
+            pp=self.plan_stage('short/'+stem,'adopt-'+stem,smoke=True)
+            with patch.dict(os.environ,{'RUN_PLAN':str(pp)}):
+                ns=self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            self.assertEqual(ns['run'].run_id,'adopt-'+stem)
+            self.assertEqual(ns['run'].manifest['parent_run_id'],'parent')
+            self.assertEqual(ns['run'].output_dir,self.root/f'results_reproduction/runs/adopt-{stem}/short/{stem}')
+
     def test_collision_and_missing_inputs(self):
         from viral_cnn.m02_workflow import begin_m02
         a=self.begin(run_id='same');(a.output_dir/'keep').write_bytes(b'keep')
@@ -198,6 +282,15 @@ class M02Tests(unittest.TestCase):
             with a.guard():a.complete(input_files=[self.root/'missing'])
         self.assertEqual(json.loads(a.manifest_path.read_text())['status'],'FAILED')
         self.assertEqual((a.output_dir/'keep').read_bytes(),b'keep')
+
+        for stem in ['01','02','09']:
+            ns=self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            run=ns['run'];snapshot={str(p):p.read_bytes() for p in run.output_dir.rglob('*') if p.is_file()}
+            with patch.dict(os.environ,{'M02_RUN_ID':run.run_id}),self.assertRaises(FileExistsError):
+                self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            self.assertEqual(snapshot,{str(p):p.read_bytes() for p in run.output_dir.rglob('*') if p.is_file()})
+            with self.assertRaises((FileNotFoundError,ValueError)):
+                self.execute09() if stem=='09' else self.notebook(stem,smoke=False,stop=2)
 
     def test_manifest_identity_and_lineage(self):
         src=self.root/'source';src.write_bytes(b'input');ck=self.root/'ck';ck.write_bytes(b'weights')
@@ -220,6 +313,15 @@ class M02Tests(unittest.TestCase):
                 with r.guard():raise RuntimeError('intentional')
             m=json.loads(r.manifest_path.read_text());self.assertEqual(m['status'],'FAILED');self.assertEqual(m['error'],'intentional')
 
+        for stem in ['01','02','09']:
+            ns=self.execute09(smoke=True,stop=1) if stem=='09' else self.notebook(stem,stop=2)
+            path=next((ROOT/'notebooks/reproduction/short').glob(stem+'_*.ipynb'))
+            cells=[c for c in json.loads(path.read_text())['cells'] if c['cell_type']=='code']
+            target=cells[1] if stem=='09' else cells[2]
+            with patch('pandas.DataFrame.to_csv',side_effect=RuntimeError('forced product failure')),          patch.dict(ns,{'build_registered_model':lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('forced model failure'))}),          self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
+                exec(''.join(target['source']),ns)
+            self.assertEqual(json.loads(ns['run'].manifest_path.read_text())['status'],'FAILED')
+
     def test_reservation_preserves_bytes(self):
         r=self.begin(run_id='immutable');p=r.output_dir/'keep';p.write_bytes(b'previous')
         before={str(p):p.read_bytes() for p in r.output_dir.rglob('*') if p.is_file()}
@@ -232,6 +334,13 @@ class M02Tests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             with r.guard():r.complete(input_files=[self.root/'missing.parquet'])
         self.assertEqual(before,set(self.root.rglob('*.parquet')))
+
+        sentinel=self.root/'historical.parquet';sentinel.write_bytes(b'untouched history')
+        before={str(p):p.read_bytes() for p in self.root.rglob('*.parquet')}
+        for stem in ['01','02','09']:
+            with self.assertRaises((FileNotFoundError,ValueError)):
+                self.execute09() if stem=='09' else self.notebook(stem,smoke=False,stop=2)
+            self.assertEqual(before,{str(p):p.read_bytes() for p in self.root.rglob('*.parquet')})
 
     def plot_data(self):
         truth=np.array([0,0,1,1]);pred={m:{r:truth.copy() for r in RATES} for m in METHODS}
@@ -246,6 +355,14 @@ class M02Tests(unittest.TestCase):
         self.assertEqual(len(df),105);self.assertEqual(set(df.method),set(METHODS))
         row=df[(df.method=='BLASTN')&(df.noise_rate==0)&(df.stratum=='all')].iloc[0]
         self.assertEqual((row.n,row.n_covered,row.accuracy,row.coverage,row.conditional_accuracy),(4,2,.25,.5,.5))
+
+        self.assertEqual(set(zip(df.method,df.noise_rate,df.stratum)),{(m,r,s) for m in METHODS for r in RATES for s in masks})
+        self.assertFalse(df.duplicated(['method','noise_rate','stratum']).any())
+        for row in df.itertuples():
+            expected_n=4 if row.stratum=='all' else 2
+            self.assertEqual(row.n,expected_n)
+            expected=(.25,.5,.5) if row.method=='BLASTN' and row.noise_rate==0 and row.stratum=='all' else (.5,1.,.5) if row.method=='BLASTN' and row.noise_rate==0 and row.stratum=='overlap' else (0.,0.,np.nan) if row.method=='BLASTN' and row.noise_rate==0 else (1.,1.,1.)
+            np.testing.assert_allclose([row.accuracy,row.coverage,row.conditional_accuracy],expected,equal_nan=True)
 
     def test_abstention_denominators(self):
         from viral_cnn.baselines.benchmark_plotting import benchmark_summary
@@ -273,6 +390,30 @@ class M02Tests(unittest.TestCase):
                 self.assertIn('N=',title);self.assertIn('Wilson 95%',title);self.assertEqual(count,7);self.assertEqual(set(labels),set(METHODS))
         self.assertFalse(plt.get_fignums())
 
+        point=df[(df.method=='BLASTN')&(df.noise_rate==0)&(df.stratum=='all')].iloc[0]
+        self.assertAlmostEqual(point.accuracy_ci_low,0.045586062644636216)
+        self.assertAlmostEqual(point.accuracy_ci_high,0.6993639475573634)
+        from matplotlib.figure import Figure
+        # Assert actual plotted coordinates and Wilson polygon bounds, not only legends.
+        orig=Figure.savefig
+        seen=[]
+        def coordinates(fig,*a,**kw):
+            metric='coverage' if 'coverage' in str(a[0]) else 'accuracy'
+            for ax,stratum in zip(fig.axes,['all','overlap','no_exact_overlap']):
+                self.assertIn('N='+str(4 if stratum=='all' else 2),ax.get_title())
+                self.assertEqual(len(ax.collections),7)
+                for line,band in zip(ax.lines,ax.collections):
+                    expected=df[(df.method==line.get_label())&(df.stratum==stratum)].sort_values('noise_rate')
+                    np.testing.assert_allclose(line.get_xdata(),expected.noise_rate)
+                    np.testing.assert_allclose(line.get_ydata(),expected[metric])
+                    vertices=band.get_paths()[0].vertices
+                    for rate,lo,hi in zip(expected.noise_rate,expected[metric+'_ci_low'],expected[metric+'_ci_high']):
+                        ys=vertices[np.isclose(vertices[:,0],rate),1]
+                        self.assertAlmostEqual(ys.min(),lo);self.assertAlmostEqual(ys.max(),hi)
+            seen.append(metric);return orig(fig,*a,**kw)
+        with patch.object(Figure,'savefig',coordinates):render_curves(src,self.root)
+        self.assertEqual(set(seen),{'accuracy','coverage'})
+
     def test_csv_figure_regeneration_and_hashes(self):
         from viral_cnn.baselines.benchmark_plotting import benchmark_summary, render_curves
         truth,pred,masks=self.plot_data();run=self.begin('short/09')
@@ -284,6 +425,15 @@ class M02Tests(unittest.TestCase):
             for k,magic in [('png',b'\x89PNG'),('pdf',b'%PDF')]:
                 p=Path(r[k]);self.assertTrue(p.read_bytes().startswith(magic));self.assertEqual(outputs[str(p)]['sha256'],sha(p))
 
+        # The notebook must persist the links, not merely return a Python dict.
+        ns=self.execute09(smoke=True);manifest=json.loads(ns['run'].manifest_path.read_text())
+        products={r['path']:r for r in manifest['outputs']};links=ns['output_dir']/'figure_sources.json'
+        self.assertEqual(products[str(links)]['sha256'],sha(links))
+        for record in json.loads(links.read_text()):
+            self.assertEqual(record['source_sha256'],sha(record['source_csv']))
+            self.assertEqual(products[record['source_csv']]['sha256'],sha(record['source_csv']))
+            for kind in ['png','pdf']:self.assertEqual(products[record[kind]]['sha256'],sha(record[kind]))
+
     def test_paired_difference_grid(self):
         from viral_cnn.baselines.benchmark_plotting import paired_differences
         truth,pred,masks=self.plot_data();df=paired_differences(truth,pred,masks)
@@ -293,6 +443,21 @@ class M02Tests(unittest.TestCase):
         self.assertEqual(row.repeats,2000);self.assertEqual(row.seed,42)
         self.assertEqual(row.ci_status,'available');self.assertLessEqual(row.ci_lower_pp,75.);self.assertGreaterEqual(row.ci_upper_pp,75.)
         self.assertEqual(set(zip(df.method_a,df.method_b)),{(a,b) for a in METHODS[:5] for b in METHODS[-2:]})
+
+        self.assertEqual(set(zip(df.method_a,df.method_b,df.noise_rate,df.stratum)),{(a,b,r,s) for a in METHODS[:5] for b in METHODS[-2:] for r in RATES for s in masks})
+        self.assertFalse(df.duplicated(['method_a','method_b','noise_rate','stratum']).any())
+        self.assertEqual((row.ci_lower_pp,row.ci_upper_pp),(50.,100.))
+        for cell in df.itertuples():
+            expected=75. if cell.method_b=='BLASTN' and cell.noise_rate==0 and cell.stratum=='all' else 50. if cell.method_b=='BLASTN' and cell.noise_rate==0 and cell.stratum=='overlap' else 100. if cell.method_b=='BLASTN' and cell.noise_rate==0 else 0.
+            self.assertEqual(cell.diff_mean_pp,expected)
+            self.assertEqual((cell.repeats,cell.seed,cell.resampling_unit),(2000,42,'species'))
+        # Negative direction and unequal species support use literal expected bounds.
+        truth=np.array([0,0,0,1]);pred={m:{r:truth.copy() for r in RATES} for m in METHODS}
+        for rate in RATES:pred[METHODS[0]][rate]=np.array([1,1,1,1])
+        masks={s:np.ones(4,dtype=bool) for s in ['all','overlap','no_exact_overlap']}
+        negative=paired_differences(truth,pred,masks)
+        cell=negative[(negative.method_a==METHODS[0])&(negative.method_b=='BLASTN')].iloc[0]
+        self.assertEqual((cell.diff_mean_pp,cell.ci_lower_pp,cell.ci_upper_pp),(-75.,-100.,0.))
 
     def test_paired_unavailable_intervals(self):
         from viral_cnn.baselines.benchmark_plotting import paired_differences
@@ -340,6 +505,18 @@ class M02Tests(unittest.TestCase):
         self.assertEqual((row['resampling_unit'],row['strata'],row['repetitions'],row['seed'],row['ci_level']),
                          ('fragment','true_taxon_with_fixed_support',2000,42,.95));self.assertEqual(row['estimate'],.75)
 
+        ns=self.notebook('01');data=json.loads((ns['output_dir']/'c04_uncertainty.json').read_text())
+        self.assertEqual(data['protocol'],'c04_stratified_fragment_v1');self.assertEqual(len(data['rows']),35)
+        for result in data['rows']:
+            for metric in ['accuracy','macro_f1','weighted_f1','top5_accuracy']:
+                published=result['uncertainty']['estimates'][metric]
+                self.assertEqual((published['resampling_unit'],published['strata'],published['repetitions'],published['seed'],published['ci_level']),
+                                 ('fragment','true_taxon_with_fixed_support',2000,42,.95))
+                self.assertEqual(published['n'],64)
+                field={'accuracy':'top1_accuracy','macro_f1':'macro_f1','weighted_f1':'weighted_f1','top5_accuracy':'top5_accuracy'}[metric]
+                expected=result[field]/100 if metric in ('accuracy','top5_accuracy') else result[field]
+                self.assertAlmostEqual(published['estimate'],expected)
+
     def test_notebook01_complete(self):
         ns=self.notebook('01');m=json.loads(ns['run'].manifest_path.read_text())
         self.assertEqual(m['status'],'COMPLETE');self.assertTrue(m['is_smoke_test']);self.assertEqual(len(ns['summary_rows']),35)
@@ -381,6 +558,12 @@ class M02Tests(unittest.TestCase):
         self.assertEqual(out['temperature_state'],'SEALED');self.assertEqual(s.provenance['criterion'],'validation_clean_cross_entropy')
         with self.assertRaises(RuntimeError):s.fit(logits,[0,1])
 
+        ns,events=self.literal_calibration(watch=True)
+        self.assertEqual(events.count('fit'),2);self.assertEqual(events.count('seal'),2);self.assertEqual(events.count('test'),2)
+        self.assertEqual(events,['fit','seal','test','fit','seal','test'])
+        self.assertTrue(all(r['temperature_state']=='SEALED' for r in ns['cal_rows']))
+        with self.assertRaisesRegex(ValueError,'overlap'):self.literal_calibration(overlap=True)
+
     def test_reliability_support_and_n(self):
         from viral_cnn.eval.calibration import compute_reliability_diagram, save_reliability_comparison
         from matplotlib.figure import Figure
@@ -392,6 +575,24 @@ class M02Tests(unittest.TestCase):
         df=pd.read_csv(r['csv']);self.assertEqual(df.groupby('state')['count'].sum().to_dict(),{'after':2,'before':2})
         with self.assertRaises(ValueError):save_reliability_comparison(bins,[],self.root,title='bad',filename_prefix='bad')
 
+        ns,_=self.literal_calibration()
+        m=json.loads(ns['run'].manifest_path.read_text());identities={r['path']:r for r in m['inputs']}
+        for path in ns['species_test_files']+ns['species_val_files']:
+            self.assertEqual(identities[str(Path(path).resolve())]['sha256'],sha(path))
+        for row in ns['cal_rows']:
+            self.assertAlmostEqual(row['ece'],.25,places=6);self.assertAlmostEqual(row['brier'],.625,places=6)
+            self.assertAlmostEqual(row['nll'],-.5*(np.log(.75)+np.log(.25)),places=6)
+            t=row['temperature_provenance']['temperature'];prob=1/(1+np.exp(-np.log(3)/t))
+            self.assertAlmostEqual(row['calibrated_ece'],prob-.5,places=5)
+            self.assertAlmostEqual(row['calibrated_brier'],(1-prob)**2+prob**2,places=5)
+            self.assertAlmostEqual(row['calibrated_nll'],-.5*(np.log(prob)+np.log(1-prob)),places=5)
+            self.assertEqual(sum(b['count'] for b in row['reliability_bins']['before']),64)
+            self.assertEqual(sum(b['count'] for b in row['reliability_bins']['after']),64)
+        outputs={r['path']:r for r in m['outputs']}
+        for record in ns['figure_records']:
+            meta=json.loads(Path(record['json']).read_text())['metadata'];self.assertEqual(meta['n'],64)
+            for key in ['csv','json','png','pdf']:self.assertEqual(outputs[record[key]]['sha256'],sha(record[key]))
+
     def test_gradcam_smoke_only(self):
         import torch
         from types import SimpleNamespace
@@ -401,6 +602,10 @@ class M02Tests(unittest.TestCase):
         with patch('torch.randint',side_effect=AssertionError('random empirical GradCAM')),contextlib.redirect_stdout(io.StringIO()):exec(source,ns)
         self.assertEqual(json.loads((run.output_dir/'gradcam_status.json').read_text())['status'],'omitted_empirical')
         self.assertNotIn('sample_input',ns)
+
+        ns=self.notebook('02',stop=5)
+        self.assertIn('sample_input',ns);self.assertEqual(tuple(ns['sample_input'].shape),(1,512))
+        self.assertEqual(json.loads((ns['output_dir']/'gradcam_status.json').read_text())['status'],'synthetic_demonstration')
 
     def test_notebook02_complete(self):
         ns=self.notebook('02');m=json.loads(ns['run'].manifest_path.read_text())
@@ -420,13 +625,20 @@ class M02Tests(unittest.TestCase):
             self.assertEqual(scope['noise_realizations_per_rate'],1);self.assertFalse(scope['training_variability_estimated'])
             self.assertEqual(scope['confidence'],.95);self.assertEqual(scope['seed'],42)
 
-    def execute09(self,source=None,smoke=False):
+        for stem in ['01','02','09']:
+            ns=self.execute09(smoke=True) if stem=='09' else self.notebook(stem)
+            actual=json.loads(ns['run'].manifest_path.read_text())['statistical_scope']
+            self.assertEqual(actual['noise_realizations_per_rate'],1);self.assertFalse(actual['training_variability_estimated'])
+            self.assertEqual(actual['confidence'],.95);self.assertEqual(actual['seed'],42)
+
+    def execute09(self,source=None,smoke=False,stop=None):
         path=next((ROOT/'notebooks/reproduction/short').glob('09_*.ipynb'))
         ns={'__name__':'__main__'}
         env={'M02_PROJECT_ROOT':str(self.root),'DATA_ROOT':str(self.root),'SMOKE_TEST':'1' if smoke else '0'}
         if source:env['C03_PREPARED_DIR']=str(source)
         with patch.dict(os.environ,env),contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
-            for c in json.loads(path.read_text())['cells']:
+            for i,c in enumerate(json.loads(path.read_text())['cells']):
+                if stop is not None and i>stop:break
                 if c['cell_type']=='code':exec(''.join(c['source']),ns)
             self.assertEqual(os.environ['DATA_ROOT'],str(self.root));self.assertEqual(os.environ['SMOKE_TEST'],env['SMOKE_TEST'])
         return ns
@@ -472,3 +684,69 @@ class M02Tests(unittest.TestCase):
         obj['query_manifest']={'path':str(qm),'sha256':sha(qm)}
         obj['execution_details'].update(query_csv_path=str(table),query_csv_sha256=sha(table),query_fasta_path=str(fasta),query_fasta_sha256=sha(fasta));put(mp,obj)
         report=inspect_c03_package(out);self.assertEqual(report['status'],'BLOCKED');self.assertIn('shared',report['error'].lower())
+
+    def plan_stage(self,stage,run_id,*,smoke,c03=None,seed=42):
+        output=self.root/'results_reproduction/runs'/run_id/stage;output.mkdir(parents=True)
+        manifest_name='manifest_09_baselines.json' if stage=='short/09' else 'manifest.json'
+        plan={'protocol_id':'m00_run_plan_v1','schema_version':1,'parent_run_id':'parent','data_root':str(self.root),
+              'is_smoke_test':smoke,'seed':seed,'population_id':'fixture-pop','split_id':'fixture-split','stages':[
+                  {'notebook_id':stage,'run_id':run_id,'parent_run_id':'parent','action':'run','output_dir':str(output),
+                   'manifest':str(output/manifest_name),'requirements':[],'dependencies':[]} ]}
+        if c03:plan['stages'][0]['dependencies']=[{'source':'c03','kind':'external','manifest':str(c03/'preparation_manifest.json'),'sha256':sha(c03/'preparation_manifest.json')}]
+        path=self.root/(run_id+'.json');put(path,plan);return path
+
+    def literal_calibration(self,*,watch=False,overlap=False):
+        """Execute notebook setup/calibration/publication with identified binary logits."""
+        import torch
+        from viral_cnn.eval.calibration import TemperatureScaler
+        import viral_cnn.eval.calibration as calibration
+        ns=self.notebook('02',stop=1);run=ns['run'];orig_prepare=run.prepare_smoke
+        def fixtures():
+            orig_prepare()
+            for split in ['test','val']:
+                path=run.ctx.data_root/f'cnn_kraken/processed_kraken_species_splited_parquet/{split}.parquet'
+                frame=pd.read_parquet(path);frame['label']=np.arange(64)%2;frame.to_parquet(path,index=False)
+        run.prepare_smoke=fixtures
+        nb=json.loads(next((ROOT/'notebooks/reproduction/short').glob('02_*.ipynb')).read_text())
+        with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):exec(''.join(nb['cells'][2]['source']),ns)
+        if overlap:
+            shared=next(iter(ns['test_loader'].dataset._partition_ids.values()))
+            ns['val_loader'].dataset._partition_ids['additional-partition']=shared
+        class Literal(torch.nn.Module):
+            def forward(self,x):return torch.tensor([np.log(3),0.],dtype=torch.float32).expand(len(x),-1)
+        ns['build_registered_model']=lambda *a,**kw:Literal()
+        ns.update(top_k_confused=[],species_model_variants=[],eval_model_name='resnet_clean_species',tax_path=None)
+        events=[];last=[None];phase=['validation']
+        original_fit=TemperatureScaler.fit;original_seal=TemperatureScaler.seal;original_noise=calibration.inject_noise
+        def fit(s,*a,**kw):
+            self.assertEqual(kw['split_name'],'validation')
+            self.assertEqual(kw['validation_provenance']['split'],'validation')
+            events.append('fit');last[0]=s;return original_fit(s,*a,**kw)
+        def seal(s):
+            result=original_seal(s);events.append('seal');return result
+        class Observed:
+            def __init__(self,loader,name):self.loader=loader;self.dataset=loader.dataset;self.name=name
+            def __len__(self):return len(self.loader)
+            def __iter__(inner):
+                phase[0]=inner.name
+                if inner.name=='test':
+                    self.assertIsNotNone(last[0]);self.assertEqual(last[0].state,'SEALED');events.append('test')
+                yield from inner.loader
+        def noise(*a,**kw):
+            self.assertEqual(phase[0],'test');return original_noise(*a,**kw)
+        if watch:
+            ns['val_loader']=Observed(ns['val_loader'],'validation');ns['test_loader']=Observed(ns['test_loader'],'test')
+        with patch.object(TemperatureScaler,'fit',fit),patch.object(TemperatureScaler,'seal',seal),patch.object(calibration,'inject_noise',noise if watch else original_noise),contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+            exec(''.join(nb['cells'][7]['source']),ns)
+            exec(''.join(nb['cells'][8]['source']),ns)
+        return ns,events
+
+    def test_pinned_seed_and_data_root(self):
+        from viral_cnn.m02_workflow import begin_m02
+        path=self.plan_stage('short/01','wrong-seed',smoke=False,seed=43)
+        with self.assertRaisesRegex(ValueError,'seed'):begin_m02('short/01',project_root=self.root,run_plan=path)
+        (self.root/'cnn_kraken').mkdir()
+        child=self.root/'explicit-child';child.mkdir()
+        run=begin_m02('short/01',project_root=self.root,settings={'data_root':str(child),'is_smoke_test':False})
+        self.assertEqual(run.ctx.data_root,child);self.assertEqual(run.ctx.topology.root,child)
+        self.assertEqual(run.configuration['data_root'],str(child));self.assertFalse((child/'cnn_kraken').exists())

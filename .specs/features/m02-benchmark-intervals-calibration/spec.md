@@ -142,7 +142,7 @@ Nenhuma alteração metodológica ao roadmap. Novas figuras permanecem produtos 
 - src/viral_cnn/baselines/overlap.py, preparation.py e paired.py: validação C03, Wilson e bootstrap por espécie já existentes.
 - src/viral_cnn/eval/uncertainty.py e calibration.py: bootstrap C04 e TemperatureScaler com proveniência e selo.
 - tests/test_c03_baselines.py e tests/test_c04_uncertainty.py: contratos existentes a preservar.
-- /home/matheus/Documents/mestrado/aulas/RL/seminario/mcts-hnm/.agents/skills/tlc-spec-driven/SKILL.md, versão 4.1.0: aprovação de spec e tarefas antes de execução.
+- ${TLC_SPEC_DRIVEN_ROOT}/SKILL.md, versão 4.1.0: aprovação de spec e tarefas antes de execução.
 
 ## Evidence Chain and Impact
 

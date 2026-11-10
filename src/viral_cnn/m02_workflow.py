@@ -11,7 +11,7 @@ from typing import Any, Iterator
 
 import yaml
 from viral_cnn.notebook_runtime import (file_identity, get_git_commit, get_library_versions,
-    reserve_run_directory, setup_notebook_runtime, resolve_split_files, ensure_smoke_test_artifacts)
+    reserve_run_directory, setup_notebook_runtime, resolve_split_files, ensure_smoke_test_artifacts, JupyterHubDataTopology)
 from viral_cnn.run_planning import load_run_plan
 from viral_cnn.utils.logging_utils import log_artifact_path
 
@@ -41,6 +41,9 @@ class M02Run:
         smoke=configuration['is_smoke_test']
         data=output/'fixtures' if smoke else Path(configuration['data_root'])
         self.ctx=setup_notebook_runtime(data_root=data,smoke_test=smoke,auto_smoke_fallback=False)
+        # Explicit M02 inputs are pinned; remote auto-discovery must not replace them.
+        self.ctx.data_root=Path(data).resolve()
+        self.ctx.topology=JupyterHubDataTopology(self.ctx.data_root)
         for req in configuration.get('requirements',[]):
             key=req.get('topology_key')
             if key and not smoke:
@@ -136,6 +139,7 @@ def begin_m02(notebook_id: str, *, project_root: str | Path | None = None,
         matches=[s for s in plan['stages'] if s['notebook_id']==notebook_id]
         if len(matches)!=1 or matches[0].get('action')!='run':raise ValueError('Stage must be selected once with action run')
         stage=matches[0]
+        if plan.get('seed',42) != 42:raise ValueError('M00 seed conflict: M02 preserves seed 42')
         pinned={**stage.get('m02',{}),'data_root':plan['data_root'],'is_smoke_test':plan['is_smoke_test'],
                 'population_id':plan.get('population_id','unknown'),'split_id':plan.get('split_id','unknown')}
         for d in stage.get('dependencies',[]):
@@ -158,7 +162,8 @@ def begin_m02(notebook_id: str, *, project_root: str | Path | None = None,
         config.setdefault('is_smoke_test',ctx.is_smoke_test)
         if os.getenv('C03_PREPARED_DIR'):config['c03_prepared_dir']=str(_resolved(os.environ['C03_PREPARED_DIR'],Path(config['data_root'])))
     if config.get('c03_prepared_dir'):
-        config['c03_prepared_dir']=str(_resolved(config['c03_prepared_dir'],Path(config['data_root'])))
+        from viral_cnn.baselines.overlap import resolve_c03_directory
+        config['c03_prepared_dir']=str(resolve_c03_directory(config['c03_prepared_dir'],config['data_root']))
     if config.get('seed',42)!=42:raise ValueError('M02 preserves seed 42')
     if config.get('c03_prepared_dir'):log_artifact_path('M02 selected C03',config['c03_prepared_dir'])
     if stage:

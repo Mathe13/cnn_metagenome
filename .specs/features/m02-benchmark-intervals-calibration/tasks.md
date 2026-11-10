@@ -2,7 +2,7 @@
 
 ## Execution Protocol
 
-Implementar com o skill `tlc-spec-driven` v4.1.0 já localizado e lido nesta sessão. Seguir seu ciclo Execute, gates, commit por tarefa e Verifier independente. Caminho do skill: `/home/matheus/Documents/mestrado/aulas/RL/seminario/mcts-hnm/.agents/skills/tlc-spec-driven/`. Não substituir por tlc-spec-lean.
+Implementar com o skill `tlc-spec-driven` v4.1.0 já localizado e lido nesta sessão. Seguir seu ciclo Execute, gates, commit por tarefa e Verifier independente. Caminho do skill: `${TLC_SPEC_DRIVEN_ROOT}/`. Não substituir por tlc-spec-lean.
 
 **Design**: `.specs/features/m02-benchmark-intervals-calibration/design.md`
 **Status**: In Progress
@@ -337,10 +337,14 @@ T3 também depende de T2 e T5 de T4 pelo encadeamento estrito entre fases. As tr
 ## Handoff
 
 **Settled mid-build:** Spec aprovada: user: "prossiga", 2026-11-09. Design A e tarefas aprovados: user: "aprovado", 2026-11-09.
-**Dispatched:** none. Após último commit: registrar HEAD, disparar Verifier independente e atualizar retorno antes de qualquer novo dispatch.
+**Dispatched:** Verifier independente em 1d9cd0f, diff 161137f..1d9cd0f, registrado antes do envio; returned com relatório FAIL e F1–F8. Passada única de correção em andamento. Sem screens agent porque não há captura vinculante.
 **Walked:** 01/02 executados com backbone mínimo; 09 consumiu pacote de 35 condições com torch.load/build bloqueados e executou smoke de 40 queries. CSVs, PNG/PDF, hashes, abstenção e falhas inspecionados pelas 37 provas locais. Sem UI web ou execução remota.
 **Next:** provas finais e revisão independente após oito tarefas.
 **Limits:** sem preflight remoto, checkpoints canônicos ou número do artigo reproduzido. Parquets afetados no incidente M01 permanecem inadmissíveis.
 
 
 **Final proof incident:** Em d2ab242, suite completa PASS 37/37 (86,364 s), mas o coletor não reconheceu C10/C20 porque avisos CUDA/Matplotlib quebraram linhas do unittest. Correção de isolamento: GPU sempre indisponível por patch nos testes M02 e import Matplotlib antes dos casos, sem mudar asserções.
+
+**Repair scope F1–F8:** referência direta/aninhada exige modo empírico explícito; resolução C03 compartilhada; schema C00 com três grupos de requisitos; seed do plano e DATA_ROOT preservados. Provas selecionadas ampliadas no mesmo nível dos notebooks: planos/reservas/falhas/bytes, 35 condições, hashes coerentes, ordem fit→seal→test e sobreposição parcial, logits literais e métricas antes/depois, grades únicas e ICs literais, bandas/curvas contra CSV e vínculos persistidos. Nenhuma asserção anterior removida ou enfraquecida. Resumo F1 de 01 passa a usar a mesma precisão do estimador C04; protocolos e denominadores preservados.
+
+**Repair gates:** oito testes iniciais de reparo passaram; 13/14 provas ampliadas passaram na primeira execução, com um conflito de arredondamento F1 no resumo. O resumo foi alinhado à precisão do IC e C13 passou na reexecução (30,841 s), sem mudar asserções. F1–F8 implementados; 38 métodos M02 no encerramento.

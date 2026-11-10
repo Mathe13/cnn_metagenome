@@ -98,6 +98,7 @@ def _verify_path_hash(path: Path, expected: Any, cache: Dict[str, str], *, conte
     key = str(path.resolve())
     if key not in cache:
         cache[key] = _sha256_path(path)
+        log_artifact_path(context, path, extra="sha256=" + cache[key])
     if cache[key] != str(expected).lower():
         raise ValueError(f"{context} SHA-256 mismatch: {path}")
 
@@ -271,6 +272,7 @@ def load_prepared_baseline_benchmark(
     manifests: Dict[Tuple[str, float], Dict[str, Any]] = {}
     required = {"baseline_protocol", "method", "noise_rate", "noise_protocol", "query_manifest", "class_order_sha256", "reference", "tool_version", "command", "abstention_policy", "output_sha256", "completion", "is_smoke_test"}
     for manifest_path in manifest_paths:
+        log_artifact_path("C03 method manifest", manifest_path)
         with manifest_path.open("r", encoding="utf-8") as handle:
             record = json.load(handle)
         missing = required - set(record)
@@ -350,11 +352,15 @@ def load_prepared_baseline_benchmark(
             reference_path = Path(str(reference_info["path"]))
             _verify_path_hash(reference_path, reference_info["sha256"], reference_checks, context=f"Reference manifest for {method}/{noise}")
             reference_manifest = json.loads(reference_path.read_text(encoding="utf-8"))
+            if reference_manifest.get("is_smoke_test") is not False:
+                raise ValueError(f"Synthetic or unknown reference mode: {reference_path}")
             source_manifest = reference_manifest
             if reference_manifest.get("reference_manifest"):
                 nested_path = Path(reference_manifest["reference_manifest"])
                 _verify_path_hash(nested_path, reference_manifest.get("reference_manifest_sha256"), reference_checks, context="Nested reference manifest")
                 source_manifest = json.loads(nested_path.read_text(encoding="utf-8"))
+                if source_manifest.get("is_smoke_test") is not False:
+                    raise ValueError(f"Synthetic or unknown nested reference mode: {nested_path}")
             source_path = source_manifest.get("train_path")
             source_hash = source_manifest.get("train_sha256")
             if not source_path or not source_hash:
@@ -671,4 +677,15 @@ def inspect_c03_package(benchmark_dir: Union[str, Path], *, include_artifacts: b
             raise ValueError("Expected 35 complete C03 method conditions")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         report.update(status="BLOCKED", error=str(exc))
+    report["requirements"] = [{"requirement": name, "path": str(path),
+        "status": report["status"], "detail": report.get("error", "validated in complete C03 package")}
+        for name,path in (("C03 preparation",root/"preparation_manifest.json"),
+                          ("C03 database builds referenced by tool conditions",root/"comparison_results"),
+                          ("C03 35 complete method conditions",root/"comparison_results"))]
     return report
+
+
+def resolve_c03_directory(value: Union[str, Path], data_root: Union[str, Path]) -> Path:
+    """Resolve explicit C03 paths identically for the notebook and preflight."""
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else Path(data_root).expanduser() / path).resolve()

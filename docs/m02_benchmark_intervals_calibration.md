@@ -47,16 +47,16 @@ when empty and claimed exclusively. A retry needs a new reservation.
 
 ## Execute
 
-After preflight, execute the notebook from the repository root:
+After preflight, execute from the repository root in an environment with nbconvert installed (normally the remote JupyterHub kernel environment). This local .venv does not contain Jupyter/nbconvert; these commands were not executed locally. Use the Python interpreter of that prepared environment:
 
 ```bash
-.venv/bin/jupyter nbconvert --execute --to notebook --stdout \
+python -m nbconvert --execute --to notebook --stdout \
   notebooks/reproduction/short/01_benchmark_clean_and_noise.ipynb \
   > /tmp/m02-01.executed.ipynb
-.venv/bin/jupyter nbconvert --execute --to notebook --stdout \
+python -m nbconvert --execute --to notebook --stdout \
   notebooks/reproduction/short/02_analyze_confidence_and_calibration.ipynb \
   > /tmp/m02-02.executed.ipynb
-.venv/bin/jupyter nbconvert --execute --to notebook --stdout \
+python -m nbconvert --execute --to notebook --stdout \
   notebooks/reproduction/short/09_benchmark_cnns_kraken2_blast_overlap.ipynb \
   > /tmp/m02-09.executed.ipynb
 ```
@@ -82,7 +82,7 @@ no model and starts no search tool. It requires:
   Kraken2-flat and BLASTN × 0/0.02/0.05/0.10/0.15.
 - Same query IDs, truth labels and materialized sequence content at each rate,
   shared class order and training reference, identified checkpoints, canonical
-  absten­tion handling and matching hashes.
+  abstention handling and matching hashes.
 
 Old preparation exports without explicit COMPLETE remain read-only history;
 regenerate an export in a new namespace with the current C03 exporter. Do not add
@@ -92,6 +92,8 @@ The ResNet presentation alias `resnet50_species` maps explicitly to the verified
 variant `resnet_clean_species`; it does not authorize swapping checkpoints.
 
 ## Products and statistical scope
+
+01 publishes full-precision F1 point estimates in the summary, matching the IC JSON (the evaluator historically rounded these to six decimals). Definitions and denominators are unchanged.
 
 01 retains profiling, clean/noisy metrics, F1 bands, specialist comparisons and
 C04 per-query evidence/uncertainty. `c04_notebook_manifest.json` retains the C04
