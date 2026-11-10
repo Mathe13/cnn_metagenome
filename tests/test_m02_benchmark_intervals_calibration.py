@@ -304,3 +304,63 @@ class M02Tests(unittest.TestCase):
         r=render_differences(src,self.root)
         self.assertEqual(r['source_sha256'],sha(src));self.assertTrue(Path(r['png']).read_bytes().startswith(b'\x89PNG'))
         self.assertTrue(Path(r['pdf']).read_bytes().startswith(b'%PDF'))
+
+    def notebook(self,stem,*,smoke=True,stop=None,settings=None):
+        """Execute actual cells with a tiny backbone; never use shared DATA_ROOT."""
+        import torch
+        torch.set_num_threads(1)
+        from viral_cnn.models.resnet import OneHotEmbedding
+        class Tiny(torch.nn.Module):
+            def __init__(self,k):
+                super().__init__();self.emb=OneHotEmbedding();self.layer4=torch.nn.Conv1d(4,8,3,padding=1);self.fc=torch.nn.Linear(8,k)
+            def forward(self,x):return self.fc(self.layer4(self.emb(x)).mean(-1))
+        path=next((ROOT/'notebooks/reproduction/short').glob(stem+'_*.ipynb'))
+        config=self.root/'m02.yaml'
+        import yaml
+        config.write_text(yaml.safe_dump({'data_root':str(self.root),'is_smoke_test':smoke,**(settings or {})}))
+        ns={'__name__':'__main__'}
+        with patch.dict(os.environ,{'M02_PROJECT_ROOT':str(self.root),'M02_CONFIG':str(config),'SMOKE_TEST':'1' if smoke else '0'}), \
+             patch('viral_cnn.models.registry.build_registered_model',side_effect=lambda n,**kw:Tiny(3 if n.endswith('_genus') else 5)), \
+             patch('viral_cnn.training.profiler.profile_inference_model',return_value={'total_params':1,'avg_latency_ms':.1}), \
+             contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+            for i,c in enumerate(json.loads(path.read_text())['cells']):
+                if stop is not None and i>stop:break
+                if c['cell_type']=='code':exec(''.join(c['source']),ns)
+        return ns
+
+    def test_c04_interval_contract(self):
+        from viral_cnn.eval.uncertainty import bootstrap_classification_intervals
+        obj=bootstrap_classification_intervals([0,0,1,1],[0,1,1,1],2,repetitions=2000,seed=42,confidence=.95)
+        row=obj['estimates']['accuracy']
+        self.assertEqual((row['resampling_unit'],row['strata'],row['repetitions'],row['seed'],row['ci_level']),
+                         ('fragment','true_taxon_with_fixed_support',2000,42,.95));self.assertEqual(row['estimate'],.75)
+
+    def test_notebook01_complete(self):
+        ns=self.notebook('01');m=json.loads(ns['run'].manifest_path.read_text())
+        self.assertEqual(m['status'],'COMPLETE');self.assertTrue(m['is_smoke_test']);self.assertEqual(len(ns['summary_rows']),35)
+        self.assertEqual(m['statistical_scope']['noise_realizations_per_rate'],1)
+        self.assertFalse(m['statistical_scope']['training_variability_estimated'])
+        self.assertEqual(len(ns['c04_evidence_records']),35)
+        self.assertFalse((self.root/'cnn_kraken').exists())
+        self.assertTrue(all(r['sha256']==sha(r['path']) for r in m['outputs']))
+
+    def test_notebook01_failure_isolated(self):
+        with self.assertRaises(FileNotFoundError):self.notebook('01',smoke=False,stop=2)
+        paths=list(self.root.glob('results_reproduction/runs/*/short/01/manifest.json'))
+        self.assertEqual(len(paths),1);self.assertEqual(json.loads(paths[0].read_text())['status'],'FAILED')
+        self.assertFalse(list(self.root.glob('cnn_kraken/**/*.parquet')))
+
+    def test_m00_reserved_notebook01(self):
+        from viral_cnn.m02_workflow import begin_m02
+        output=self.root/'results_reproduction/runs/child/short/01';output.mkdir(parents=True)
+        alternate=self.root/'alternate.parquet';pd.DataFrame({'sequence_padded':['A'*512],'label':[0]}).to_parquet(alternate,index=False)
+        plan={'protocol_id':'m00_run_plan_v1','schema_version':1,'parent_run_id':'parent','data_root':str(self.root),
+              'is_smoke_test':False,'seed':42,'population_id':'p','split_id':'s','stages':[
+                  {'notebook_id':'short/01','run_id':'child','parent_run_id':'parent','action':'run','output_dir':str(output),
+                   'manifest':str(output/'manifest.json'),'requirements':[{'path':str(alternate),'split':'test','topology_key':'short/species_parquet_dir'}],'dependencies':[]}]}
+        pp=self.root/'plan.json';put(pp,plan)
+        r=begin_m02('short/01',project_root=self.root,run_plan=pp)
+        self.assertEqual(r.split_files('species','test'),[str(alternate)])
+        self.assertEqual(r.run_id,'child');self.assertEqual(r.manifest['parent_run_id'],'parent')
+        self.assertEqual(r.manifest['population_id'],'p');self.assertEqual(r.manifest['split_id'],'s')
+        with self.assertRaises(FileExistsError):begin_m02('short/01',project_root=self.root,run_plan=pp)

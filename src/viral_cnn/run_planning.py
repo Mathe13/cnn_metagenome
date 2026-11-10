@@ -188,6 +188,7 @@ def _input_requirements(stage: dict[str, Any], topology: JupyterHubDataTopology)
     for spec in specs:
         spec = dict(spec)
         if 'topology' in spec:
+            spec['topology_key'] = spec['topology']
             section, name = spec.pop('topology').split('/')
             path = Path(topology.paths[section][name])
         elif spec.get('path', '').startswith(('short/', 'long/', 'checkpoints/')):

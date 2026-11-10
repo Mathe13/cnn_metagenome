@@ -11,7 +11,7 @@ from typing import Any, Iterator
 
 import yaml
 from viral_cnn.notebook_runtime import (file_identity, get_git_commit, get_library_versions,
-    reserve_run_directory, setup_notebook_runtime)
+    reserve_run_directory, setup_notebook_runtime, resolve_split_files, ensure_smoke_test_artifacts)
 from viral_cnn.run_planning import load_run_plan
 from viral_cnn.utils.logging_utils import log_artifact_path
 
@@ -41,6 +41,11 @@ class M02Run:
         smoke=configuration['is_smoke_test']
         data=output/'fixtures' if smoke else Path(configuration['data_root'])
         self.ctx=setup_notebook_runtime(data_root=data,smoke_test=smoke,auto_smoke_fallback=False)
+        for req in configuration.get('requirements',[]):
+            key=req.get('topology_key')
+            if key and not smoke:
+                section,name=key.split('/')
+                if not req.get('split'):self.ctx.topology.paths[section][name]=req['path']
         self.run_id=run_id
         try:
             dirty=bool(subprocess.check_output(['git','status','--porcelain'],stderr=subprocess.DEVNULL).strip())
@@ -53,6 +58,28 @@ class M02Run:
             'scientific_reproduction_certified':False,'statistical_scope':STATISTICAL_SCOPE,
             'evidence':{'status':'synthetic' if smoke else 'observed'}}
         _atomic(manifest,self.manifest)
+
+    def split_files(self, rank: str, split: str) -> list[str]:
+        """Resolve a split selected in the plan, or the configured topology."""
+        normalized='validation' if split=='val' else split
+        key=f'short/{rank}_parquet_dir'
+        for req in self.configuration.get('requirements',[]):
+            if req.get('topology_key')==key and req.get('split') in (split,normalized):
+                return resolve_split_files(req['path'],split)
+        explicit=self.configuration.get('inputs',{}).get(f'{rank}_{normalized}')
+        path=explicit or self.ctx.topology.paths['short'][f'{rank}_parquet_dir']
+        return resolve_split_files(path,split)
+
+    def prepare_smoke(self) -> None:
+        """Create fixtures only under this run, with distinct validation identity."""
+        if not self.ctx.is_smoke_test:raise ValueError('No synthetic artifacts in empirical mode')
+        ensure_smoke_test_artifacts(self.ctx.data_root)
+        import pandas as pd
+        for rank in ('species','genus'):
+            path=self.ctx.data_root/f'cnn_kraken/processed_kraken_{rank}_splited_parquet/val.parquet'
+            frame=pd.read_parquet(path)
+            frame['sequence_padded']=frame.sequence_padded.str.translate(str.maketrans('ACGT','CGTA'))
+            frame.to_parquet(path,index=False)
 
     @contextmanager
     def guard(self) -> Iterator[None]:
@@ -121,6 +148,7 @@ def begin_m02(notebook_id: str, *, project_root: str | Path | None = None,
                 raise ValueError(f'M00 input conflict: {key}')
         if os.getenv('SMOKE_TEST') is not None and (os.environ['SMOKE_TEST'].lower() in ('1','true','yes'))!=pinned['is_smoke_test']:
             raise ValueError('M00 smoke mode conflict')
+        pinned['requirements']=stage.get('requirements',[])
         config=pinned;config['run_plan_identity']=file_identity(source_plan)
     else:
         # Runtime supplies the remote topology default; fallback is explicitly disabled.

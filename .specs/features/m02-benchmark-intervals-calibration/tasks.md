@@ -163,14 +163,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] Células executadas sobre fixtures temporárias com modelos mínimos; destinos M00/standalone isolados; protocolo C04, semente/repetições e escopo de ruído persistidos.
-- [ ] Provas C9–C13, C17, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 3 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Full passa; contagem real e resultado registrados antes do commit.
+- [x] Células executadas sobre fixtures temporárias com modelos mínimos; destinos M00/standalone isolados; protocolo C04, semente/repetições e escopo de ruído persistidos.
+- [x] Provas C9–C13, C17, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 3 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Full passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: integration
 **Gate**: Full
 **Commit**: `feat(m02): adopt isolated C04 benchmark notebook runs`
+
+**Result**: 4 testes passaram: notebook 01 inteiro com backbone mínimo, 35 evidências C04, IC 2000/42/95%, falha isolada e reserva/split M00.
 
 ### T6: Notebook 02 com calibração e GradCAM delimitado
 
