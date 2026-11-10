@@ -522,3 +522,7 @@ This project is licensed under the MIT License.
 ## M01: data, taxonomy and split audit
 
 The reproduction notebooks 10 → 11 → 05 now use isolated runs and explicit inputs. See [M01 commands and evidence limits](docs/m01_data_taxonomy_split.md) and [standalone configuration](configs/reproduction_m01.yaml). Missing empirical ICTV workbooks fail; auditing an existing taxonomy is a separate protocol. Local synthetic checks do not reproduce paper results.
+
+## M02: benchmark, intervals and calibration
+
+Reproduction notebooks 01/02/09 now use isolated M02 runs. Notebook 09 validates the complete 35-condition C03 package before consuming predictions. See [M02 commands, outputs and evidence limits](docs/m02_benchmark_intervals_calibration.md) and [standalone configuration](configs/reproduction_m02.yaml). Local fixtures verify contracts and do not reproduce paper results.

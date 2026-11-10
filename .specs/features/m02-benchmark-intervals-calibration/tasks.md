@@ -226,14 +226,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] Comandos exatos e arquivos/manifests descritos; dependências canônicas ausentes declaradas; distingue uma realização de ruído, unidades de IC e ausência de reprodução empírica local.
-- [ ] Provas Revisão documental e manifesto; critérios científicos cobertos nas tarefas anteriores. implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Revisão dos comandos e limites científicos concluída.
-- [ ] Gate Build passa; contagem real e resultado registrados antes do commit.
+- [x] Comandos exatos e arquivos/manifests descritos; dependências canônicas ausentes declaradas; distingue uma realização de ruído, unidades de IC e ausência de reprodução empírica local.
+- [x] Provas Revisão documental e manifesto; critérios científicos cobertos nas tarefas anteriores. implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Revisão dos comandos e limites científicos concluída.
+- [x] Gate Build passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: none
 **Gate**: Build
 **Commit**: `docs(m02): document benchmark execution and evidence limits`
+
+**Result**: Guia com comandos M00/standalone, entradas, produtos, estimandos e limites; config M02 e requisitos Genus de 01 publicados. git diff --check e validate_spec passaram. 37 métodos M02 prontos para a rodada final; nenhuma execução remota.
 
 ## Checks
 

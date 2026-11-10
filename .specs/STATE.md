@@ -37,10 +37,10 @@
 | AD-029 | M01 identifica 10/11/05 por run exclusivo e manifesto COMPLETE/FAILED; `m01_fragment_split_audit_v1` usa N integral de test e união direto/RC; auditoria de referência (`m01_existing_taxonomy_audit_v1`) é distinta de curadoria MSL (`m01_ictv_curate_v1`). Ranks não resolvidos e labels divergentes não são reparados silenciosamente; `hierarchy_ready=false` bloqueia publicação de nova taxonomia para consumidores 02/06. | Preserva fontes e população histórica, aplica reservas M00 e impede fallback sintético em modo empírico. Auditoria taxonômica não identifica genomas; hashes limitados de fragmentos são explicitamente incompletos. | active | 2026-11-09 |
 
 ## Handoff
-**Feature**: m01-data-taxonomy-split
-**Where**: M01 implementada em `21dfc84`, provas ampliadas em `c6821ad`; Verifier independente PASS 23/23, perfil light, rodada 2 scoped. 27 provas M01 reexecutadas no HEAD corrigido e 57 regressões verificadas na rodada 1, total 84 testes; gate com zero erros/avisos.
-**In progress**: preflight remoto e validação empírica integral não executados. A auditoria de referência existente é protocolo distinto da curadoria MSL; nenhum número do artigo foi reproduzido.
-**Next step**: M02 conforme roadmap; antes da rodada integral, selecionar fontes canônicas verificadas e executar preflight por etapa. Nunca consumir os Parquets locais afetados abaixo como evidência empírica.
-**Blockers**: planilha MSL41.v1 e híbrido canônico ausentes localmente; checkpoints não eram necessários e não foram carregados. No início do BUILD, execução smoke do notebook 05 ainda legado sobrescreveu sete Parquets ignorados de Species/Genus e teste long; conteúdo anterior não foi hashado e não pode ser restaurado por evidência desta sessão. CSVs de classes preservados por hashes confirmados. Incidente em `docs/m01_data_taxonomy_split.md`, relatório e L-011; novo fluxo e testes usam namespaces isolados.
-**Uncommitted**: nenhuma alteração de implementação pendente; fechamento documental/revisão e lições registrados no commit final, sem saída científica nova versionada.
+**Feature**: m02-benchmark-intervals-calibration
+**Where**: Spec, design A e oito tarefas aprovados pelo usuário; T1–T7 implementadas em commits locais. T8 documentação/configuração em fechamento.
+**In progress**: provas finais e regressões C03/C04/M00/C00/runtime, seguidas de Verifier independente. M02 não está declarado concluído.
+**Next step**: registrar resultados reais em verification.md; corrigir achados e executar gate final.
+**Blockers**: checkpoints, Parquets e pacote C03 canônicos do cluster não montados; preflight remoto e reprodução empírica pendentes. Incidente M01 continua válido: sete Parquets locais foram sobrescritos por smoke legado, sem hash anterior; não são evidência empírica. CSVs de classes têm hashes confirmados em M01.
+**Uncommitted**: documentação/configuração M02 e fechamento de T8; nenhuma saída científica nova versionada.
 **Branch**: main

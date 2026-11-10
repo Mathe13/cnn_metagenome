@@ -1,5 +1,4 @@
-# M00 only inspects and reserves. Edit explicit input selections before use.
-# Relative paths use DATA_ROOT; M01 roles pin producer inputs.
+# M00 reserves explicit inputs and destinations; M02 adds specialized C03 content validation.
 protocol_id: m00_run_plan_v1
 data_root: .
 seed: 42
@@ -53,6 +52,21 @@ stages:
     columns:
     - id
     - species
+  - topology: short/genus_parquet_dir
+    kind: parquet
+    split: test
+    columns:
+    - sequence_padded
+    - label
+  - topology: checkpoints/resnet_genus
+    kind: file
+  - topology: checkpoints/convnext_genus
+    kind: file
+  - topology: short/genus_csv
+    kind: csv
+    columns:
+    - id
+    - genus
 - notebook_id: short/02
   manifest_name: manifest.json
   requirements:
@@ -98,13 +112,13 @@ stages:
 - notebook_id: short/03
   manifest_name: manifest.json
   action: skip
-  reason: Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela
-    rodada padrão.
+  reason: "Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela\
+    \ rodada padr\xE3o."
 - notebook_id: short/04
   manifest_name: manifest.json
   action: skip
-  reason: Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela
-    rodada padrão.
+  reason: "Reutilizar checkpoints existentes; nenhum treinamento novo autorizado pela\
+    \ rodada padr\xE3o."
 - notebook_id: short/05
   manifest_name: manifest.json
   requirements:

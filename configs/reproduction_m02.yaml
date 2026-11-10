@@ -1,0 +1,8 @@
+# Standalone M02. Export DATA_ROOT and SMOKE_TEST explicitly in the kernel.
+# With RUN_PLAN, use only the inputs pinned by M00; do not combine with this config.
+seed: 42
+population_id: unknown
+split_id: unknown
+# Select an existing completed package through C03_PREPARED_DIR or set this path.
+# Relative c03_prepared_dir paths resolve under DATA_ROOT.
+c03_prepared_dir: null
