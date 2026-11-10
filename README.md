@@ -518,3 +518,7 @@ If you use this codebase, models, or methodology in your research, please cite:
 ## License
 
 This project is licensed under the MIT License.
+
+## M01: data, taxonomy and split audit
+
+The reproduction notebooks 10 → 11 → 05 now use isolated runs and explicit inputs. See [M01 commands and evidence limits](docs/m01_data_taxonomy_split.md) and [standalone configuration](configs/reproduction_m01.yaml). Missing empirical ICTV workbooks fail; auditing an existing taxonomy is a separate protocol. Local synthetic checks do not reproduce paper results.

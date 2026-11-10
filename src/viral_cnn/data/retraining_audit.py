@@ -18,6 +18,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterator
 
+from viral_cnn.utils.logging_utils import log_artifact_path
+
 SEQUENCE_COLUMNS = ("sequence_padded", "padded_Representation", "sequence")
 SPECIES_COLUMNS = ("species_id", "label")
 GENOME_COLUMNS = ("genome_id", "accession", "source_accession")
@@ -26,9 +28,15 @@ _IUPAC_ALPHABET = re.compile(r"[ACGTRYSWKMBDHVN]+\Z")
 _IUPAC_COMPLEMENT = str.maketrans("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN")
 
 
-def split_files(path: str | Path) -> list[Path]:
+def split_files(path: str | Path | list[str | Path]) -> list[Path]:
     """Accept an explicit split directory/file, never traverse sibling splits."""
+    if isinstance(path, (list, tuple)):
+        files = [f for item in path for f in split_files(item)]
+        if len(set(files)) != len(files):
+            raise ValueError("Duplicate fragment partition in input list")
+        return files
     p = Path(path).expanduser().resolve()
+    log_artifact_path("fragment split", p)
     if p.is_file() and p.suffix.lower() in (".parquet", ".csv"):
         return [p]
     if p.is_dir():
@@ -58,6 +66,7 @@ def _iter_rows(files: list[Path], columns: tuple[str, str, str | None]) -> Itera
     seq_col, species_col, genome_col = columns
     names = [seq_col, species_col] + ([genome_col] if genome_col else [])
     for file in files:
+        log_artifact_path("fragment partition", file)
         if file.suffix.lower() == ".csv":
             with file.open(newline="", encoding="utf-8") as handle:
                 yield from ((row[seq_col], row[species_col], row.get(genome_col) if genome_col else None)
@@ -177,6 +186,7 @@ def audit_retraining_need(
     per_species: dict[str, Counter[str]] = defaultdict(Counter)
     n_train = n_test = n_match = n_match_compatible = missing_train_groups = missing_test_groups = 0
     unseen_test_rows = 0
+    orientation = Counter()
     train_quality: Counter[str] = Counter()
     test_quality: Counter[str] = Counter()
 
@@ -186,6 +196,8 @@ def audit_retraining_need(
             db.execute("PRAGMA journal_mode=OFF")
             db.execute("PRAGMA synchronous=OFF")
             db.execute("CREATE TABLE hashes (hash TEXT PRIMARY KEY) WITHOUT ROWID")
+            db.execute("CREATE TABLE forward_hashes (hash TEXT PRIMARY KEY) WITHOUT ROWID")
+            forward_batch: list[tuple[str]] = []
             batch: list[tuple[str]] = []
             for raw in _iter_rows(train_files, train_cols):
                 seq, species, genome = _normalized(*raw)
@@ -193,6 +205,7 @@ def audit_retraining_need(
                 train_species.add(species)
                 if _sequence_quality(seq, train_quality):
                     batch.append((_canonical_hash(seq),))
+                    forward_batch.append((hashlib.sha256(seq.encode()).hexdigest(),))
                 if train_cols[2]:
                     if genome is None:
                         missing_train_groups += 1
@@ -204,16 +217,20 @@ def audit_retraining_need(
                 if len(batch) >= 5000:
                     db.executemany("INSERT OR IGNORE INTO hashes VALUES (?)", batch)
                     batch.clear()
+                    db.executemany("INSERT OR IGNORE INTO forward_hashes VALUES (?)", forward_batch)
+                    forward_batch.clear()
             if batch:
                 db.executemany("INSERT OR IGNORE INTO hashes VALUES (?)", batch)
+            if forward_batch:
+                db.executemany("INSERT OR IGNORE INTO forward_hashes VALUES (?)", forward_batch)
             db.commit()
             unique_train = db.execute("SELECT count(*) FROM hashes").fetchone()[0]
 
-            test_chunk: list[tuple[str | None, str, bool]] = []
+            test_chunk: list[tuple[str | None, str, bool, str | None, str | None]] = []
 
-            def _flush_test_chunk(chunk: list[tuple[str | None, str, bool]]) -> None:
+            def _flush_test_chunk(chunk: list[tuple[str | None, str, bool, str | None, str | None]]) -> None:
                 nonlocal n_match, n_match_compatible
-                candidate_digests = list({d for d, _, _ in chunk if d is not None})
+                candidate_digests = list({d for d, *_ in chunk if d is not None})
                 matched_digests: set[str] = set()
                 for i in range(0, len(candidate_digests), 900):
                     sub = candidate_digests[i : i + 900]
@@ -223,7 +240,19 @@ def audit_retraining_need(
                         sub,
                     ).fetchall()
                     matched_digests.update(r[0] for r in rows)
-                for digest, sp, comp in chunk:
+                oriented = list({d for row in chunk for d in row[3:] if d is not None})
+                forward_matches: set[str] = set()
+                for i in range(0, len(oriented), 900):
+                    sub = oriented[i:i + 900]
+                    placeholders = ",".join("?" for _ in sub)
+                    forward_matches.update(r[0] for r in db.execute(
+                        f"SELECT hash FROM forward_hashes WHERE hash IN ({placeholders})", sub))
+                for digest, sp, comp, forward, reverse in chunk:
+                    direct_hit = forward is not None and forward in forward_matches
+                    reverse_hit = reverse is not None and reverse in forward_matches
+                    orientation["direct_matches"] += int(direct_hit)
+                    orientation["reverse_complement_matches"] += int(reverse_hit)
+                    orientation["both_matches"] += int(direct_hit and reverse_hit)
                     if digest is not None and digest in matched_digests:
                         n_match += 1
                         per_species[sp]["exact_matches"] += 1
@@ -244,7 +273,10 @@ def audit_retraining_need(
                 if compatible:
                     per_species[species]["benchmark_compatible_test_rows"] += 1
                 digest = _canonical_hash(seq) if hashable else None
-                test_chunk.append((digest, species, compatible))
+                forward = hashlib.sha256(seq.encode()).hexdigest() if hashable else None
+                reverse = (hashlib.sha256(seq.translate(_IUPAC_COMPLEMENT)[::-1].encode()).hexdigest()
+                           if hashable and _IUPAC_ALPHABET.fullmatch(seq) else None)
+                test_chunk.append((digest, species, compatible, forward, reverse))
                 if len(test_chunk) >= 5000:
                     _flush_test_chunk(test_chunk)
                 if test_cols[2]:
@@ -294,6 +326,8 @@ def audit_retraining_need(
 
     report: dict[str, Any] = {
         "status": status,
+        **{key: orientation[key] for key in ("direct_matches", "reverse_complement_matches", "both_matches")},
+        "population": "fragment_test_vs_train_not_c03_queries",
         "recommendation": recommendation,
         "target": "unseen genomes of species represented in training",
         "scope": "full_test" if full_test else f"first_{max_test_rows}_test_rows_pilot",

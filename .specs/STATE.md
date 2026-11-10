@@ -34,11 +34,13 @@
 
 | AD-028 | M00 usa `m00_run_plan_v1`: inventário limitado por tamanho e plano explícito por rodada/etapa, com dependências planned/external, seleção externa por SHA-256 e destinos exclusivos. Dependência futura/incompleta/sintética no modo empírico bloqueia prontidão; retomada 06/06b exige validação C09 própria. | Preserva referências e separa prontidão administrativa de reprodução científica; M00 não migra notebooks nem substitui validadores C03/C09/C06. | active | 2026-11-09 |
 
+| AD-029 | M01 identifica 10/11/05 por run exclusivo e manifesto COMPLETE/FAILED; `m01_fragment_split_audit_v1` usa N integral de test e união direto/RC; auditoria de referência (`m01_existing_taxonomy_audit_v1`) é distinta de curadoria MSL (`m01_ictv_curate_v1`). Ranks não resolvidos e labels divergentes não são reparados silenciosamente; `hierarchy_ready=false` bloqueia publicação de nova taxonomia para consumidores 02/06. | Preserva fontes e população histórica, aplica reservas M00 e impede fallback sintético em modo empírico. Auditoria taxonômica não identifica genomas; hashes limitados de fragmentos são explicitamente incompletos. | active | 2026-11-09 |
+
 ## Handoff
-**Feature**: m00-reproduction-run-plan
-**Where**: M00 concluída, perfil light, Verifier independente PASS em `f097c42`: 18/18 checks comprovados, 22 testes M00 reexecutados pelo Verifier e gate 0 erros/avisos. Autor executou 91 testes locais no total (31 M00/C00/runtime e 60 C02/C06/C09). Commit concorrente `c26635a` adiciona apenas o roadmap, preservado sem alteração de código.
-**In progress**: preflight remoto e reprodução empírica não executados; os namespaces ainda precisam ser adotados pelos produtores nas próximas fases.
-**Next step**: iniciar plano M01: parametrização/isolamento de 10/11/05, falha explícita sem planilha ICTV em modo empírico e auditoria de taxonomia/split; depois seguir M02–M07 antes da rodada integral.
-**Blockers**: dados Parquet/checkpoints canônicos do cluster não montados. Planos BLOCKED são diagnóstico; READY de metadados não certifica evidência científica.
-**Uncommitted**: artefatos históricos e bundle preexistentes fora do escopo, preservados. Nenhum resultado científico novo da M00.
+**Feature**: m01-data-taxonomy-split
+**Where**: Plano aprovado, 23 checks derivados e implementação local concluída; revisão independente pendente após commit.
+**In progress**: verificação light independente; preflight remoto e validação empírica integral não executados.
+**Next step**: validar todos os checks pelo Verifier e executar o gate; somente depois preparar M02 conforme o roadmap.
+**Blockers**: planilha MSL41.v1 e híbrido canônico ausentes localmente; proveniência dos Parquets locais não demonstrada. Nenhum checkpoint foi carregado e nenhum resultado do artigo foi reproduzido.
+**Uncommitted**: alterações M01 de código, notebooks, configurações, documentação e contratos; saídas históricas preservadas.
 **Branch**: main

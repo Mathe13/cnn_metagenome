@@ -1,5 +1,5 @@
 # M00 only inspects and reserves. Edit explicit input selections before use.
-# Relative manifest/input paths use DATA_ROOT; reference_roots use project root.
+# Relative paths use DATA_ROOT; M01 roles pin producer inputs.
 protocol_id: m00_run_plan_v1
 data_root: .
 seed: 42
@@ -113,11 +113,18 @@ stages:
     sheets:
     - MSL
     - Taxa Renamed or Abolished
+    role: ictv_master
   - topology: short/species_csv
     kind: csv
     columns:
     - id
     - species
+    role: original_mapping
+  m01:
+    mode: curate
+  dependencies:
+  - source: short/10
+    kind: planned
 - notebook_id: short/06
   manifest_name: manifest.json
   requirements:
@@ -209,8 +216,55 @@ stages:
     manifest: cnn_kraken/benchmark_kraken_blast_20_per_species/preparation_manifest.json
 - notebook_id: short/10
   manifest_name: manifest.json
+  requirements:
+  - topology: short/species_csv
+    kind: csv
+    role: original_mapping
+    columns:
+    - id
+    - species
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: train
+    role: train
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: validation
+    role: validation
+    columns:
+    - sequence_padded
+    - label
+  - topology: short/species_parquet_dir
+    kind: parquet
+    split: test
+    role: test
+    columns:
+    - sequence_padded
+    - label
 - notebook_id: short/11
   manifest_name: manifest.json
+  requirements:
+  - topology: short/species_csv
+    kind: csv
+    role: original_mapping
+    columns:
+    - id
+    - species
+  - topology: short/hybrid_taxonomy_parquet
+    kind: parquet
+    role: taxonomy_path
+    columns:
+    - id
+    - species
+    - model_label
+    - Genus
+    - Order
+  dependencies:
+  - source: short/10
+    kind: planned
 - notebook_id: short/06b
   manifest_name: manifest.json
   dependencies:

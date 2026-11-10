@@ -11,3 +11,6 @@ seaborn==0.13.2
 PyYAML==6.0.3
 tqdm==4.67.1
 jupyterlab==4.4.10
+
+# ICTV workbook parsing, verified for M01 (2026-11-09).
+openpyxl==3.1.5

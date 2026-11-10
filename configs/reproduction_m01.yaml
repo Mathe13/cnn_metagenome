@@ -1,0 +1,18 @@
+# Standalone M01 inputs. All paths below are relative to DATA_ROOT.
+# Select the matching M00 plan instead for a coordinated round.
+data_root: .
+seed: 42
+mode: curate
+original_mapping: dataset_kraken/species_name_ids.csv
+ictv_master: short/ICTV_Master_Species_List_2025_MSL41.v1.xlsx
+taxonomy_path: cnn_kraken/data_taxonomy_parquet/main_taxonomy_hybrid_CLEANSED.parquet
+# overlap_manifest: results_reproduction/runs/<selected-run>/short/10/manifest.json
+# ncbi_taxonomy: <identified-local-taxonomy.csv>
+# work_dir: <volume-for-temporary-SQLite>
+# max_test_rows: 1000  # pilot only; never a full-test taxonomic audit
+hash_max_bytes: 16777216
+# Omit splits to resolve train/validation/test using DATA_ROOT topology.
+# splits:
+#   train: cnn_kraken/processed_kraken_species_splited_parquet/train
+#   validation: cnn_kraken/processed_kraken_species_splited_parquet/validation
+#   test: cnn_kraken/processed_kraken_species_splited_parquet/test

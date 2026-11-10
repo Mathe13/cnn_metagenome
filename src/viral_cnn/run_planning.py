@@ -361,6 +361,8 @@ def build_run_plan(
                      'output_dir': str(target), 'manifest': str(target / spec.get('manifest_name', 'manifest.json')),
                      'action': spec.get('action', 'run'), 'reason': spec.get('reason', ''),
                      'resources': resources, 'requirements': requirements[key], 'dependencies': []}
+            if spec.get('m01') is not None:
+                stage['m01'] = spec['m01']
             if spec.get('resume_manifest'):
                 source = _path(spec['resume_manifest'], data)
                 stage['resume'] = {'manifest': str(source), 'sha256': _sha256(source) if source.is_file() else 'unknown',

@@ -12,9 +12,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from viral_cnn.utils.logging_utils import log_artifact_path
+
 
 def _rows(path: str | Path) -> list[dict[str, Any]]:
     file = Path(path).expanduser().resolve()
+    log_artifact_path("taxonomy audit input", file)
     if not file.is_file():
         raise FileNotFoundError(file)
     if file.suffix.lower() == ".csv":
@@ -43,6 +46,7 @@ def audit_taxonomy_against_overlap(
     decision_path: str | Path,
     output_dir: str | Path,
     original_mapping_path: str | Path | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Check label integrity and stratify *observed* exact overlap by taxonomy.
 
@@ -52,6 +56,7 @@ def audit_taxonomy_against_overlap(
     """
     taxonomy = _rows(taxonomy_path)
     species_rows = _rows(per_species_path)
+    log_artifact_path("overlap decision", Path(decision_path).resolve())
     with Path(decision_path).expanduser().open(encoding="utf-8") as handle:
         decision = json.load(handle)
     if not taxonomy or not species_rows:
@@ -127,7 +132,11 @@ def audit_taxonomy_against_overlap(
         }
         label_rows.append(output_row)
         for rank, groups in by_rank.items():
-            name = str(mapping.get(rank) or "[missing]")
+            value = mapping.get(rank)
+            name = str(value or "[missing]")
+            if strict and (value is None or str(value).strip().lower() in ("", "none", "nan", "null", "error")
+                           or str(value).strip().lower().startswith(("unassigned", "unclassified"))):
+                name = "[unresolved]"
             groups[name]["test_rows"] += counts["test_rows"]
             groups[name]["exact_matches"] += counts["exact_matches"]
             groups[name]["species_labels"] += 1
@@ -156,6 +165,14 @@ def audit_taxonomy_against_overlap(
         "genome_provenance_resolved": False,
         "interpretation": "The mapping validates taxonomic identity per label; it does not associate a fragment with its source accession or prove a genome-disjoint split.",
     }
+    if strict:
+        import pandas as pd
+        from viral_cnn.taxonomy.curation import validate_taxonomy_identity
+
+        validation = validate_taxonomy_identity(pd.DataFrame(taxonomy), pd.DataFrame(original))
+        report.update(validation)
+        report["mapping_integrity_ok"] = integrity_ok and validation["mapping_integrity_ok"]
+        report["hierarchy_ready"] = report["mapping_integrity_ok"] and validation["hierarchy_ready"]
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     (output / "taxonomy_audit.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

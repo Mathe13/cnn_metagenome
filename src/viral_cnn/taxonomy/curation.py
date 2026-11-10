@@ -245,6 +245,7 @@ def build_hybrid_taxonomy(
     ictv_renames: Optional[pd.DataFrame] = None,
     ncbi_df: Optional[pd.DataFrame] = None,
     fuzzy_cutoff: float = 90.0,
+    sanitize: bool = True,
 ) -> pd.DataFrame:
     """
     Full taxonomy curation pipeline:
@@ -280,5 +281,56 @@ def build_hybrid_taxonomy(
                     resolved_df.loc[fallback_mask, r] = merged_ncbi[f"{r}_ncbi"].values
             resolved_df.drop(columns=["_sp_key"], inplace=True)
 
-    return sanitize_hybrid_taxonomy(resolved_df)
+    return sanitize_hybrid_taxonomy(resolved_df) if sanitize else resolved_df
+
+
+def validate_taxonomy_identity(
+    taxonomy: pd.DataFrame, original: pd.DataFrame, *, require_model_label: bool = True
+) -> dict[str, Any]:
+    """Report identity and unresolved hierarchy without repairing either table.
+
+    IDs must be unique positive integers covering the original class table.
+    Labels, when supplied, must equal id-1. Operational placeholders are not
+    biological ranks and cannot certify hierarchy readiness.
+    """
+    errors: list[str] = []
+    if require_model_label and "model_label" not in taxonomy:
+        errors.append("taxonomy: missing model_label")
+    for name, table in (("original", original), ("taxonomy", taxonomy)):
+        if table.empty or not {"id", "species"}.issubset(table.columns):
+            errors.append(f"{name}: nonempty id/species table required")
+            continue
+        ids = pd.to_numeric(table["id"], errors="coerce")
+        if ids.isna().any() or (ids < 1).any() or (ids % 1 != 0).any():
+            errors.append(f"{name}: invalid positive integer IDs")
+        if ids.duplicated().any():
+            errors.append(f"{name}: duplicate IDs")
+        if table["species"].isna().any() or table["species"].astype(str).str.strip().eq("").any():
+            errors.append(f"{name}: missing species")
+        if "model_label" in table:
+            labels = pd.to_numeric(table["model_label"], errors="coerce")
+            if not labels.eq(ids - 1).all():
+                errors.append(f"{name}: model_label != id - 1")
+    if not errors:
+        expected = original.assign(id=pd.to_numeric(original["id"])).set_index("id")["species"].astype(str).str.strip()
+        actual = taxonomy.assign(id=pd.to_numeric(taxonomy["id"])).set_index("id")["species"].astype(str).str.strip()
+        if set(expected.index) != set(actual.index):
+            errors.append("class ID set differs from original")
+        common = expected.index.intersection(actual.index)
+        if not expected.loc[common].eq(actual.loc[common]).all():
+            errors.append("original species name changed")
+        if set(expected.index) != set(range(1, len(original) + 1)):
+            errors.append("original IDs must cover 1..K")
+    unresolved: dict[str, list[int]] = {}
+    for rank in ("Genus", "Order"):
+        values = taxonomy[rank] if rank in taxonomy else pd.Series(None, index=taxonomy.index, dtype=object)
+        normalized = values.fillna("").astype(str).str.strip().str.lower()
+        missing = normalized.isin(("", "none", "nan", "null", "error", "[missing]", "[unresolved]")) | normalized.str.startswith(("unassigned", "unclassified"))
+        ids = pd.to_numeric(taxonomy.get("id", pd.Series(index=taxonomy.index, dtype=float)), errors="coerce")
+        unresolved[rank] = sorted(int(v) - 1 for v in ids[missing].dropna())
+    valid = not errors
+    return {"mapping_integrity_ok": valid, "mapping_errors": errors,
+            "unresolved_ranks": unresolved,
+            "hierarchy_ready": valid and not any(unresolved.values()),
+            "hierarchy_policy": "reject_missing"}
 

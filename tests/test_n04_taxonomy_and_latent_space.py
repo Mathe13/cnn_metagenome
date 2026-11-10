@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -40,9 +42,23 @@ class TestN04TaxonomyAndLatentSpace(unittest.TestCase):
         os.environ["MPLCONFIGDIR"] = "/tmp"
 
     def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        env = patch.dict(os.environ, {"M01_PROJECT_ROOT": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
         os.environ["SMOKE_TEST"] = "1"
         os.environ["REMOTE_SERVER"] = "False"
         os.environ["MPLCONFIGDIR"] = "/tmp"
+
+    def _execute_m01_taxonomy(self):
+        """Observe one fresh M01 namespace instead of historical fixed files."""
+        nb = json.loads(Path("notebooks/reproduction/short/05_ictv_taxonomy_curation.ipynb").read_text())
+        ns = {"__name__": "__main__"}
+        for cell in nb["cells"]:
+            if cell["cell_type"] == "code":
+                exec("".join(cell["source"]), ns)
+        return ns["manifest"]
 
     def test_c1_build_ictv_rename_map(self):
         """C1: build_ictv_rename_map extracts lowercase mapping from ICTV rename DataFrame."""
@@ -193,7 +209,8 @@ class TestN04TaxonomyAndLatentSpace(unittest.TestCase):
 
     def test_c8_notebook_05_artifacts_generated(self):
         """C8: 05_ictv_taxonomy_curation.ipynb generates cleansed parquet and manifest.json."""
-        out_dir = Path("results_reproduction/taxonomy")
+        manifest = self._execute_m01_taxonomy()
+        out_dir = Path(manifest["output_dir"])
         self.assertTrue(out_dir.exists())
 
         parquet_file = out_dir / "main_taxonomy_hybrid_CLEANSED.parquet"
@@ -204,7 +221,7 @@ class TestN04TaxonomyAndLatentSpace(unittest.TestCase):
         self.assertTrue(manifest_file.exists(), f"Expected {manifest_file} to exist")
         with open(manifest_file, "r", encoding="utf-8") as f:
             manifest_data = json.load(f)
-        self.assertEqual(manifest_data["notebook_id"], "05_ictv_taxonomy_curation")
+        self.assertEqual(manifest_data["notebook_id"], "short/05")
         self.assertIn("duplication_rate_pct", manifest_data["metrics_summary"])
 
     def test_c9_historical_curation_notebooks_preserved(self):
@@ -417,11 +434,10 @@ taxonomy_df = pd.DataFrame({"model_label": [0, 1], "Genus": ["A", "B"], "Order":
         with open(nb5_path, "r", encoding="utf-8") as f:
             nb5 = json.load(f)
 
-        # Verify Cell 4 source isolates mock_records
-        c4_code = "".join(nb5["cells"][4]["source"])
-        self.assertIn("if ctx.is_smoke_test:", c4_code)
-        self.assertIn("genome_provenance_complete = False", c4_code)
-        self.assertIn("genome_disjoint_test_classes = None", c4_code)
+        # M01 no longer manufactures genome provenance from synthetic taxon rows.
+        code = "\n".join("".join(c.get("source", [])) for c in nb5["cells"] if c["cell_type"] == "code")
+        self.assertIn("run_m01_notebook", code)
+        self.assertNotIn("mock_records", code)
 
         # Execute notebook 05 under smoke mode
         start_time = time.time()
@@ -432,12 +448,14 @@ taxonomy_df = pd.DataFrame({"model_label": [0, 1], "Genus": ["A", "B"], "Order":
         self.assertLess(time.time() - start_time, 60.0)
 
         # Verify manifest generated
-        manifest_path = Path("results_reproduction/taxonomy/manifest.json")
+        manifest_path = Path(global_ns["manifest"]["output_dir"]) / "manifest.json"
         self.assertTrue(manifest_path.exists())
         with open(manifest_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         self.assertIn("genome_provenance_complete", data["metrics_summary"])
         self.assertIn("genome_disjoint_test_classes", data["metrics_summary"])
+        self.assertFalse(data["metrics_summary"]["genome_provenance_complete"])
+        self.assertIsNone(data["metrics_summary"]["genome_disjoint_test_classes"])
 
 
 if __name__ == "__main__":
