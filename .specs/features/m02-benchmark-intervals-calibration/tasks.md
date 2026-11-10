@@ -121,14 +121,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] 105 células mantidas; abstenção conserva N; sete métodos e três estratos visíveis; N/IC Wilson identificados; CSV e PNG/PDF válidos.
-- [ ] Provas C18–C20, C23 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 4 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Quick passa; contagem real e resultado registrados antes do commit.
+- [x] 105 células mantidas; abstenção conserva N; sete métodos e três estratos visíveis; N/IC Wilson identificados; CSV e PNG/PDF válidos.
+- [x] Provas C18–C20, C23 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 4 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Quick passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: unit
 **Gate**: Quick
 **Commit**: `feat(m02): render seven-method accuracy and coverage curves`
+
+**Result**: 4 testes de resumo/curvas passaram; 105 células, abstenção, N/Wilson e PNG/PDF derivados do CSV verificados.
 
 ### T4: Diferenças pareadas CNN–ferramenta
 

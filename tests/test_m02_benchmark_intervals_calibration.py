@@ -227,3 +227,54 @@ class M02Tests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             with r.guard():r.complete(input_files=[self.root/'missing.parquet'])
         self.assertEqual(before,set(self.root.rglob('*.parquet')))
+
+    def plot_data(self):
+        truth=np.array([0,0,1,1]);pred={m:{r:truth.copy() for r in RATES} for m in METHODS}
+        pred['BLASTN'][0.]=np.array([0,-1,0,-1])
+        masks={'all':np.ones(4,dtype=bool),'overlap':np.array([1,0,1,0],dtype=bool),
+               'no_exact_overlap':np.array([0,1,0,1],dtype=bool)}
+        return truth,pred,masks
+
+    def test_full_metric_grid(self):
+        from viral_cnn.baselines.benchmark_plotting import benchmark_summary
+        truth,pred,masks=self.plot_data();df=benchmark_summary(truth,pred,masks)
+        self.assertEqual(len(df),105);self.assertEqual(set(df.method),set(METHODS))
+        row=df[(df.method=='BLASTN')&(df.noise_rate==0)&(df.stratum=='all')].iloc[0]
+        self.assertEqual((row.n,row.n_covered,row.accuracy,row.coverage,row.conditional_accuracy),(4,2,.25,.5,.5))
+
+    def test_abstention_denominators(self):
+        from viral_cnn.baselines.benchmark_plotting import benchmark_summary
+        truth,pred,masks=self.plot_data()
+        for rate in RATES:pred['BLASTN'][rate]=np.full(4,-1)
+        df=benchmark_summary(truth,pred,masks);rows=df[df.method=='BLASTN']
+        self.assertTrue((rows.accuracy==0).all());self.assertTrue((rows.coverage==0).all())
+        self.assertTrue(rows.conditional_accuracy.isna().all());self.assertEqual(rows.n.sum(),40)
+
+    def test_accuracy_coverage_panels(self):
+        from viral_cnn.baselines.benchmark_plotting import benchmark_summary, render_curves
+        import matplotlib.pyplot as plt
+        truth,pred,masks=self.plot_data();df=benchmark_summary(truth,pred,masks)
+        src=self.root/'summary.csv';df.to_csv(src,index=False)
+        saved=[]
+        from matplotlib.figure import Figure
+        orig=Figure.savefig
+        def capture(fig,*a,**kw):
+            saved.append([(ax.get_title(),len(ax.lines),[line.get_label() for line in ax.lines]) for ax in fig.axes]);return orig(fig,*a,**kw)
+        with patch.object(Figure,'savefig',capture):records=render_curves(src,self.root)
+        self.assertEqual(len(records),2)
+        for panels in saved:
+            self.assertEqual(len(panels),3)
+            for title,count,labels in panels:
+                self.assertIn('N=',title);self.assertIn('Wilson 95%',title);self.assertEqual(count,7);self.assertEqual(set(labels),set(METHODS))
+        self.assertFalse(plt.get_fignums())
+
+    def test_csv_figure_regeneration_and_hashes(self):
+        from viral_cnn.baselines.benchmark_plotting import benchmark_summary, render_curves
+        truth,pred,masks=self.plot_data();run=self.begin('short/09')
+        src=run.output_dir/'summary.csv';benchmark_summary(truth,pred,masks).to_csv(src,index=False)
+        records=render_curves(src,run.output_dir)
+        run.complete(input_files=[src]);m=json.loads(run.manifest_path.read_text());outputs={r['path']:r for r in m['outputs']}
+        for r in records:
+            self.assertEqual(r['source_sha256'],sha(src))
+            for k,magic in [('png',b'\x89PNG'),('pdf',b'%PDF')]:
+                p=Path(r[k]);self.assertTrue(p.read_bytes().startswith(magic));self.assertEqual(outputs[str(p)]['sha256'],sha(p))
