@@ -73,10 +73,11 @@ class M02Run:
     def prepare_smoke(self) -> None:
         """Create fixtures only under this run, with distinct validation identity."""
         if not self.ctx.is_smoke_test:raise ValueError('No synthetic artifacts in empirical mode')
-        ensure_smoke_test_artifacts(self.ctx.data_root)
+        ensure_smoke_test_artifacts(self.ctx.data_root, num_samples_per_split=64)
         import pandas as pd
         for rank in ('species','genus'):
             path=self.ctx.data_root/f'cnn_kraken/processed_kraken_{rank}_splited_parquet/val.parquet'
+            log_artifact_path("M02 smoke validation",path)
             frame=pd.read_parquet(path)
             frame['sequence_padded']=frame.sequence_padded.str.translate(str.maketrans('ACGT','CGTA'))
             frame.to_parquet(path,index=False)

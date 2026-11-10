@@ -57,7 +57,8 @@ def compute_and_plot_confusion_insights(
 
     batch_idx = 0
     with torch.no_grad():
-        for inputs, labels in test_loader:
+        for batch in test_loader:
+            inputs, labels = batch[:2]
             if max_batches is not None and batch_idx >= max_batches:
                 break
             if inputs.dim() == 3 and inputs.shape[0] == 1:
@@ -215,7 +216,8 @@ def get_confused_class_samples(
     batch_idx = 0
 
     with torch.no_grad():
-        for inputs, labels in test_loader:
+        for batch in test_loader:
+            inputs, labels = batch[:2]
             if max_batches is not None and batch_idx >= max_batches:
                 break
             batch_idx += 1

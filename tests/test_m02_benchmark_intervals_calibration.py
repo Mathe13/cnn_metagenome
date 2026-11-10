@@ -364,3 +364,53 @@ class M02Tests(unittest.TestCase):
         self.assertEqual(r.run_id,'child');self.assertEqual(r.manifest['parent_run_id'],'parent')
         self.assertEqual(r.manifest['population_id'],'p');self.assertEqual(r.manifest['split_id'],'s')
         with self.assertRaises(FileExistsError):begin_m02('short/01',project_root=self.root,run_plan=pp)
+
+    def test_validation_temperature_seal(self):
+        import torch
+        from viral_cnn.eval.calibration import TemperatureScaler
+        logits=torch.tensor([[2.,0.],[0.,2.]])
+        with self.assertRaises(ValueError):TemperatureScaler().fit(logits,[0,1],split_name='test')
+        with self.assertRaises(ValueError):TemperatureScaler().fit(logits,[0,1],validation_provenance={'split':'validation','identity':'same'},test_provenance={'identity':'same'})
+        s=TemperatureScaler().fit(logits,[0,1],validation_provenance={'split':'validation','identity':'validation-fixture'})
+        s.seal();out=s.transform(logits)
+        self.assertEqual(out['temperature_state'],'SEALED');self.assertEqual(s.provenance['criterion'],'validation_clean_cross_entropy')
+        with self.assertRaises(RuntimeError):s.fit(logits,[0,1])
+
+    def test_reliability_support_and_n(self):
+        from viral_cnn.eval.calibration import compute_reliability_diagram, save_reliability_comparison
+        from matplotlib.figure import Figure
+        bins=[b.to_dict() for b in compute_reliability_diagram(np.array([[.9,.1],[.7,.3]]),[0,1],n_bins=3)]
+        titles=[];orig=Figure.savefig
+        def capture(fig,*a,**kw):titles.append(fig.axes[0].get_title());return orig(fig,*a,**kw)
+        with patch.object(Figure,'savefig',capture):r=save_reliability_comparison(bins,bins,self.root,title='fixture',filename_prefix='reliability',metadata={'n':2})
+        self.assertTrue(all('N=2' in t for t in titles));self.assertTrue(r['png']);self.assertTrue(r['pdf'])
+        df=pd.read_csv(r['csv']);self.assertEqual(df.groupby('state')['count'].sum().to_dict(),{'after':2,'before':2})
+        with self.assertRaises(ValueError):save_reliability_comparison(bins,[],self.root,title='bad',filename_prefix='bad')
+
+    def test_gradcam_smoke_only(self):
+        import torch
+        from types import SimpleNamespace
+        p=next((ROOT/'notebooks/reproduction/short').glob('02_*.ipynb'))
+        source=''.join(json.loads(p.read_text())['cells'][5]['source'])
+        run=self.begin('short/02');ns={'run':run,'ctx':SimpleNamespace(is_smoke_test=False),'model':object(),'free_gpu_memory':lambda x:None,'json':json,'output_dir':run.output_dir}
+        with patch('torch.randint',side_effect=AssertionError('random empirical GradCAM')),contextlib.redirect_stdout(io.StringIO()):exec(source,ns)
+        self.assertEqual(json.loads((run.output_dir/'gradcam_status.json').read_text())['status'],'omitted_empirical')
+        self.assertNotIn('sample_input',ns)
+
+    def test_notebook02_complete(self):
+        ns=self.notebook('02');m=json.loads(ns['run'].manifest_path.read_text())
+        self.assertEqual(m['status'],'COMPLETE');self.assertEqual(len(ns['cal_rows']),4)
+        self.assertTrue(all(r['temperature_state']=='SEALED' for r in ns['cal_rows']))
+        self.assertTrue(all(r['temperature_provenance']['criterion']=='validation_clean_cross_entropy' for r in ns['cal_rows']))
+        self.assertTrue(all(r['n_samples']==64 for r in ns['cal_rows']))
+        for row in ns['cal_rows']:
+            for k in ['ece','brier','nll']:self.assertIn(k,row)
+        self.assertEqual(json.loads((ns['output_dir']/'gradcam_status.json').read_text())['status'],'synthetic_demonstration')
+        self.assertEqual(len(ns['figure_records']),4);self.assertTrue(all(r['png'] and r['pdf'] for r in ns['figure_records']))
+        self.assertFalse((self.root/'cnn_kraken').exists())
+
+    def test_uncertainty_scope(self):
+        for stage in ['short/01','short/02','short/09']:
+            run=self.begin(stage);run.complete();scope=json.loads(run.manifest_path.read_text())['statistical_scope']
+            self.assertEqual(scope['noise_realizations_per_rate'],1);self.assertFalse(scope['training_variability_estimated'])
+            self.assertEqual(scope['confidence'],.95);self.assertEqual(scope['seed'],42)

@@ -184,14 +184,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] Fixtures percorrem células; temperatura ajustada só em validation limpa e selada; fit em test/identidade sobreposta falha; N e suporte antes/depois conferidos; caminho empírico não chama GradCAM aleatório.
-- [ ] Provas C9–C12, C14–C17, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 5 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Full passa; contagem real e resultado registrados antes do commit.
+- [x] Fixtures percorrem células; temperatura ajustada só em validation limpa e selada; fit em test/identidade sobreposta falha; N e suporte antes/depois conferidos; caminho empírico não chama GradCAM aleatório.
+- [x] Provas C9–C12, C14–C17, C26 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 5 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Full passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: integration
 **Gate**: Full
 **Commit**: `fix(m02): constrain GradCAM smoke and preserve sealed calibration`
+
+**Result**: 5 testes passaram em 12,546 s; notebook 02 inteiro, validação limpa/SEALED, quatro diagramas, N e suporte, GradCAM omitido no modo empírico. Corrigida leitura de batches com IDs nas rotinas de confusão. Fixtures têm 64 amostras e identidade de validação distinta; gates de completude C04 explícitos.
 
 ### T7: Notebook 09 consumidor C03
 
@@ -234,82 +236,82 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 ## Checks
 
 **C1** - 09 conserva DATA_ROOT e SMOKE_TEST do ambiente (M02-01, C03 AC 1).
-Proof: run m02 | test_notebook09_preserves_environment (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_notebook09_preserves_environment) ... ok
+Proof: run m02 | test_notebook09_preserves_environment (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C2** - Fonte C03 por ambiente/plano registra caminho e SHA-256 (M02-01, C03 AC 2).
-Proof: run m02 | test_source_paths_and_hashes (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_source_paths_and_hashes) ... ok
+Proof: run m02 | test_source_paths_and_hashes (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C3** - Overrides de fonte divergentes do plano falham antes de métricas (M02-01, C03 AC 3).
-Proof: run m02 | test_conflicting_plan_source (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_conflicting_plan_source) ... ok
+Proof: run m02 | test_conflicting_plan_source (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C4** - Preflight e avaliação rejeitam preparação/build/condição ausente, incompleta ou com hash inválido nas 35 condições (M02-02, C03 AC 4).
-Proof: run m02 | test_c03_completeness_matrix (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_c03_completeness_matrix) ... ok
+Proof: run m02 | test_c03_completeness_matrix (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C5** - IDs, sequência e rótulos distintos na mesma taxa são rejeitados (M02-02, C03 AC 5).
-Proof: run m02 | test_c03_query_content_identity (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_c03_query_content_identity) ... ok
+Proof: run m02 | test_c03_query_content_identity (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C6** - Classes, referência e abstenção incompatíveis com C03 são rejeitadas (M02-02, C03 AC 6).
-Proof: run m02 | test_c03_classes_reference_abstention (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_c03_classes_reference_abstention) ... ok
+Proof: run m02 | test_c03_classes_reference_abstention (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C7** - Dependência sintética é rejeitada em modo empírico (M02-02, C03 AC 7).
-Proof: run m02 | test_c03_synthetic_dependency (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_c03_synthetic_dependency) ... ok
+Proof: run m02 | test_c03_synthetic_dependency (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C8** - 09 consome C03 completo sem executar CNN/Kraken2/BLASTN (M02-03, C03 AC 8).
-Proof: run m02 | test_notebook09_consumes_without_inference (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_notebook09_consumes_without_inference) ... ok
+Proof: run m02 | test_notebook09_consumes_without_inference (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C9** - 01/02/09 reservam destinos exclusivos e adotam run_id/parent M00 (M02-04, Execução AC 1).
-Proof: run m02 | test_three_notebook_reservations (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_three_notebook_reservations) ... ok
+Proof: run m02 | test_three_notebook_reservations (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C10** - Colisão/entrada ausente não sobrescreve fonte nem publica COMPLETE (M02-04, Execução AC 2).
-Proof: run m02 | test_collision_and_missing_inputs (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_collision_and_missing_inputs) ... ok
+Proof: run m02 | test_collision_and_missing_inputs (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C11** - Manifestos têm protocolo, modo, população/split, seed, commit/dirty, configuração e identidades/hashes reais (M02-04, Execução AC 3).
-Proof: run m02 | test_manifest_identity_and_lineage (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_manifest_identity_and_lineage) ... ok
+Proof: run m02 | test_manifest_identity_and_lineage (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C12** - Falha após reserva registra FAILED nos três fluxos (M02-04, Execução AC 4).
-Proof: run m02 | test_failed_run_manifest (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_failed_run_manifest) ... ok
+Proof: run m02 | test_failed_run_manifest (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C13** - IC C04 identifica fragmento estratificado/suporte fixo, 95%, seed 42 e repetições (M02-05, Execução AC 5).
-Proof: run m02 | test_c04_interval_contract (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_c04_interval_contract) ... ok
+Proof: run m02 | test_c04_interval_contract (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C14** - Temperatura usa validação limpa identificada e selo antes de test; test/identidade sobreposta rejeitados (M02-05, Execução AC 6).
-Proof: run m02 | test_validation_temperature_seal (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_validation_temperature_seal) ... ok
+Proof: run m02 | test_validation_temperature_seal (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C15** - Confiabilidade exibe N, conserva suporte e vincula ECE/Brier/NLL às entradas (M02-05, Execução AC 7).
-Proof: run m02 | test_reliability_support_and_n (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_reliability_support_and_n) ... ok
+Proof: run m02 | test_reliability_support_and_n (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C16** - 02 empírico omite GradCAM aleatório e registra omissão; smoke conserva demonstração (M02-06, Execução AC 8).
-Proof: run m02 | test_gradcam_smoke_only (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_gradcam_smoke_only) ... ok
+Proof: run m02 | test_gradcam_smoke_only (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C17** - Três fluxos registram uma realização por taxa e ausência de variabilidade entre treinamentos (M02-05, Execução AC 9).
-Proof: run m02 | test_uncertainty_scope (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_uncertainty_scope) ... ok
+Proof: run m02 | test_uncertainty_scope (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C18** - Resumo contém sete métodos × cinco taxas × três estratos e três métricas separadas (M02-07, Curvas AC 1).
-Proof: run m02 | test_full_metric_grid (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_full_metric_grid) ... ok
+Proof: run m02 | test_full_metric_grid (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C19** - Abstenção -1 conta como erro global e permanece em N (M02-07, Curvas AC 2).
-Proof: run m02 | test_abstention_denominators (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_abstention_denominators) ... ok
+Proof: run m02 | test_abstention_denominators (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C20** - Curvas mostram os sete métodos em três estratos com N e Wilson identificado (M02-07, Curvas AC 3).
-Proof: run m02 | test_accuracy_coverage_panels (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_accuracy_coverage_panels) ... ok
+Proof: run m02 | test_accuracy_coverage_panels (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C21** - Dez pares CNN–ferramenta × cinco taxas × três estratos usam pp, espécie, 2000 repetições e seed 42 (M02-08, Curvas AC 4).
-Proof: run m02 | test_paired_difference_grid (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_paired_difference_grid) ... ok
+Proof: run m02 | test_paired_difference_grid (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C22** - Estrato vazio/espécie única declara motivo de IC indisponível sem limites inventados (M02-08, Curvas AC 5).
-Proof: run m02 | test_paired_unavailable_intervals (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_paired_unavailable_intervals) ... ok
+Proof: run m02 | test_paired_unavailable_intervals (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C23** - Figuras derivam de CSV e PNG/PDF têm vínculos e hashes no manifesto (M02-09, Curvas AC 6).
-Proof: run m02 | test_csv_figure_regeneration_and_hashes (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_csv_figure_regeneration_and_hashes) ... ok
+Proof: run m02 | test_csv_figure_regeneration_and_hashes (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C24** - COMPLETE com produto alterado é recusado pelo hash (M02-02, Edge Cases AC 1).
-Proof: run m02 | test_complete_with_corrupted_product (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_complete_with_corrupted_product) ... ok
+Proof: run m02 | test_complete_with_corrupted_product (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C25** - Reuso de reserva preserva todos os bytes existentes (M02-04, Edge Cases AC 2).
-Proof: run m02 | test_reservation_preserves_bytes (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_reservation_preserves_bytes) ... ok
+Proof: run m02 | test_reservation_preserves_bytes (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 **C26** - Falta empírica falha sem gerar fixture na fonte compartilhada (M02-04, Edge Cases AC 3).
-Proof: run m02 | test_empirical_failure_never_creates_fixtures (tests.test_m02_benchmark_intervals_calibration.M02Tests.test_empirical_failure_never_creates_fixtures) ... ok
+Proof: run m02 | test_empirical_failure_never_creates_fixtures (tests.test_m02_benchmark_intervals_calibration.M02Tests) ... ok
 
 ## Granularity and Co-location
 

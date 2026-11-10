@@ -356,6 +356,9 @@ def save_reliability_comparison(
     out.mkdir(parents=True, exist_ok=True)
     if sum(int(row["count"]) for row in before_bins) != sum(int(row["count"]) for row in after_bins):
         raise ValueError("Before/after reliability bins must cover the same number of queries")
+    n = sum(int(row["count"]) for row in before_bins)
+    if f"N={n}" not in title:
+        title = f"{title} | N={n}"
     rows = [{"state": state, **row} for state, bins in (("before", before_bins), ("after", after_bins)) for row in bins]
     csv_path, json_path = out / f"{filename_prefix}.csv", out / f"{filename_prefix}.json"
     pd.DataFrame(rows).to_csv(csv_path, index=False)
@@ -680,7 +683,7 @@ def audit_dataloader_calibration_by_noise(
     """
     dev = torch.device(device) if isinstance(device, str) else device
     def _partition_identity(loader: Any) -> Optional[str]:
-        dataset = getattr(loader, "dataset", None)
+        dataset = getattr(getattr(loader, "iterable", loader), "dataset", None)
         partitions = getattr(dataset, "_partition_ids", None)
         if not partitions:
             return None
