@@ -157,10 +157,15 @@ def begin_m02(notebook_id: str, *, project_root: str | Path | None = None,
         config['data_root']=str(_resolved(os.getenv('DATA_ROOT',config.get('data_root',ctx.data_root)),root))
         config.setdefault('is_smoke_test',ctx.is_smoke_test)
         if os.getenv('C03_PREPARED_DIR'):config['c03_prepared_dir']=str(_resolved(os.environ['C03_PREPARED_DIR'],Path(config['data_root'])))
+    if config.get('c03_prepared_dir'):
+        config['c03_prepared_dir']=str(_resolved(config['c03_prepared_dir'],Path(config['data_root'])))
     if config.get('seed',42)!=42:raise ValueError('M02 preserves seed 42')
     if config.get('c03_prepared_dir'):log_artifact_path('M02 selected C03',config['c03_prepared_dir'])
     if stage:
-        run_id=stage['run_id'];parent=stage['parent_run_id'];output=Path(stage['output_dir']).resolve()
+        run_id=stage['run_id']
+        if not run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.' for c in run_id) or run_id in ('.','..'):
+            raise ValueError('Invalid M00 run_id')
+        parent=stage['parent_run_id'];output=Path(stage['output_dir']).resolve()
         expected=(root/'results_reproduction/runs'/run_id/notebook_id).resolve()
         manifest=Path(stage['manifest']).resolve()
         if output!=expected or manifest.parent!=output or parent!=plan['parent_run_id']:raise ValueError('Invalid M00 namespace')

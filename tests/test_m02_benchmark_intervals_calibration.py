@@ -36,7 +36,7 @@ def package(root):
     train, test = root/'train.csv', root/'test.csv'
     pd.DataFrame({'label':[0,1],'sequence':['A'*512,'C'*512]}).to_csv(train,index=False)
     pd.DataFrame({'query_id':['q0','q1','q2','q3'],'label':[0,0,1,1],
-                  'sequence':['A'*512,'G'*512,'C'*512,'T'*512]}).to_csv(test,index=False)
+                  'sequence':['A'*512,'AG'*256,'C'*512,'AC'*256]}).to_csv(test,index=False)
     out=root/'prepared'
     meta=prepare_queries(train,test,out,class_order_path=mapping,is_smoke_test=False)
     meta['status']='COMPLETE';put(out/'preparation_manifest.json',meta);bind_query_manifests(out)
@@ -414,3 +414,56 @@ class M02Tests(unittest.TestCase):
             run=self.begin(stage);run.complete();scope=json.loads(run.manifest_path.read_text())['statistical_scope']
             self.assertEqual(scope['noise_realizations_per_rate'],1);self.assertFalse(scope['training_variability_estimated'])
             self.assertEqual(scope['confidence'],.95);self.assertEqual(scope['seed'],42)
+
+    def execute09(self,source=None,smoke=False):
+        path=next((ROOT/'notebooks/reproduction/short').glob('09_*.ipynb'))
+        ns={'__name__':'__main__'}
+        env={'M02_PROJECT_ROOT':str(self.root),'DATA_ROOT':str(self.root),'SMOKE_TEST':'1' if smoke else '0'}
+        if source:env['C03_PREPARED_DIR']=str(source)
+        with patch.dict(os.environ,env),contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+            for c in json.loads(path.read_text())['cells']:
+                if c['cell_type']=='code':exec(''.join(c['source']),ns)
+            self.assertEqual(os.environ['DATA_ROOT'],str(self.root));self.assertEqual(os.environ['SMOKE_TEST'],env['SMOKE_TEST'])
+        return ns
+
+    def test_notebook09_preserves_environment(self):
+        ns=self.execute09(smoke=True)
+        m=json.loads(ns['run'].manifest_path.read_text());self.assertEqual(m['status'],'COMPLETE');self.assertTrue(m['is_smoke_test'])
+        self.assertEqual(ns['total_q'],40);self.assertEqual(len(ns['df_stratified']),105);self.assertEqual(len(ns['df_bootstrap']),150)
+
+    def test_notebook09_consumes_without_inference(self):
+        import torch
+        out=self.complete()
+        with patch('viral_cnn.models.registry.build_registered_model',side_effect=AssertionError('no model inference')), \
+             patch('torch.load',side_effect=AssertionError('no checkpoint load')):
+            ns=self.execute09(out)
+        m=json.loads(ns['run'].manifest_path.read_text());self.assertEqual(m['status'],'COMPLETE')
+        self.assertEqual(len(ns['method_records']),35);self.assertEqual(len(ns['df_stratified']),105)
+        self.assertTrue((ns['df_stratified'].accuracy==1.).all());self.assertTrue((ns['df_bootstrap'].diff_mean_pp==0.).all())
+        self.assertEqual(len(ns['figure_records']),3)
+        inputs={r['path']:r for r in m['inputs']}
+        self.assertEqual(inputs[str(out/'preparation_manifest.json')]['sha256'],sha(out/'preparation_manifest.json'))
+        self.assertEqual(len(m['checkpoints']),5)
+
+    def test_notebook09_invalid_package_fails(self):
+        out=self.complete();self.mutate_manifest(out,'completion','FAILED')
+        with self.assertRaises(ValueError):self.execute09(out)
+        manifests=list(self.root.glob('results_reproduction/runs/*/short/09/manifest.json'))
+        self.assertEqual(len(manifests),1);self.assertEqual(json.loads(manifests[0].read_text())['status'],'FAILED')
+        self.assertFalse(list(self.root.glob('results_reproduction/runs/*/short/09/benchmark_metrics_stratified.csv')))
+
+    def test_notebook09_missing_source(self):
+        with self.assertRaises(FileNotFoundError):self.execute09()
+        self.assertEqual(len(list(self.root.glob('results_reproduction/runs/*/short/09/manifest.json'))),1)
+        self.assertFalse((self.root/'cnn_kraken').exists())
+
+    def test_c03_rejects_second_noise_realization(self):
+        import shutil
+        out=self.complete();alt=self.root/'alternate';shutil.copytree(out,alt)
+        table=alt/'queries_noise_05.csv';frame=pd.read_csv(table);frame.loc[0,'sequence']='T'*512;frame.to_csv(table,index=False)
+        fasta=alt/'queries_noise_05.fasta';fasta.write_text(''.join(f'>{r.query_id}\n{r.sequence}\n' for r in frame.itertuples()))
+        qm=alt/'query_manifest_noise_05.json';q=json.loads(qm.read_text());q.update(query_content_sha256=sha(table),fasta_sha256=sha(fasta));put(qm,q)
+        mp=out/'comparison_results/manifest_BLASTN_noise_05.json';obj=json.loads(mp.read_text())
+        obj['query_manifest']={'path':str(qm),'sha256':sha(qm)}
+        obj['execution_details'].update(query_csv_path=str(table),query_csv_sha256=sha(table),query_fasta_path=str(fasta),query_fasta_sha256=sha(fasta));put(mp,obj)
+        report=inspect_c03_package(out);self.assertEqual(report['status'],'BLOCKED');self.assertIn('shared',report['error'].lower())

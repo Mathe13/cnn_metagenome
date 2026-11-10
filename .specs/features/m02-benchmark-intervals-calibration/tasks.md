@@ -205,14 +205,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] Execução completa do notebook em namespace temporário aceita fixture válida e bloqueia pacote inválido; ambiente preservado; nenhuma chamada a ferramentas/modelos; CSVs/figuras e hashes no manifesto.
-- [ ] Provas C1–C12, C17–C26 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 4 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Full passa; contagem real e resultado registrados antes do commit.
+- [x] Execução completa do notebook em namespace temporário aceita fixture válida e bloqueia pacote inválido; ambiente preservado; nenhuma chamada a ferramentas/modelos; CSVs/figuras e hashes no manifesto.
+- [x] Provas C1–C12, C17–C26 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 4 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Full passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: integration
 **Gate**: Full
 **Commit**: `feat(m02): consume validated paired benchmark in notebook 09`
+
+**Result**: 6 testes de adoção/guards passaram: consumo completo sem torch.load/build, smoke preserva ambiente e 40 queries, entrada inválida/ausente falha e segunda realização de ruído é rejeitada com hashes coerentes. Removidos overrides históricos; 105 métricas/150 deltas e três figuras derivadas.
 
 ### T8: Guia de execução e limites M02
 

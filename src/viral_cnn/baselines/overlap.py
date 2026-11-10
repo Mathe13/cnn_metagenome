@@ -288,6 +288,7 @@ def load_prepared_baseline_benchmark(
     reference_checks: Dict[str, str] = {}
     validated_class_order_files: Set[str] = set()
     manifest_records: List[Dict[str, Any]] = []
+    shared_conditions: Dict[float, Tuple[str, str]] = {}
 
     predictions: Dict[str, Dict[float, np.ndarray]] = {m: {} for m in target_methods}
     top_candidates: Dict[str, Dict[float, Optional[np.ndarray]]] = {m: {} for m in target_methods}
@@ -378,6 +379,12 @@ def load_prepared_baseline_benchmark(
                 expected_db_path = db_record.get("kraken_db" if method == "Kraken2-flat" else "blast_db_prefix")
                 if not expected_db_path or Path(expected_db_path).resolve() != Path(str(reference_info.get("database_path", ""))).resolve():
                     raise ValueError(f"Method database path differs from the completed build manifest: {db_path}")
+                kraken = Path(db_record.get("kraken_db", ""))
+                blast = str(db_record.get("blast_db_prefix", ""))
+                expected_outputs = [kraken / n for n in ("hash.k2d", "opts.k2d", "taxo.k2d")] + [Path(blast + e) for e in (".nhr", ".nin", ".nsq")]
+                recorded_outputs = {str(Path(p).resolve()) for p in db_record.get("output_sha256", {})}
+                if not {str(p.resolve()) for p in expected_outputs}.issubset(recorded_outputs):
+                    raise ValueError(f"Database build lacks required identified outputs: {db_path}")
                 for db_output, db_hash in db_record.get("output_sha256", {}).items():
                     _verify_path_hash(Path(db_output), db_hash, reference_checks, context="Built search database")
             if manifest["noise_protocol"] != "resample_including_original_v1":
@@ -477,6 +484,10 @@ def load_prepared_baseline_benchmark(
             query_truth = audit_df.set_index("query_id").loc[query_df["query_id"], "label"].to_numpy(dtype=np.int64)
             if not np.array_equal(query_df["label"].to_numpy(dtype=np.int64), query_truth):
                 raise ValueError(f"Materialized query labels diverge from truth: {query_table}")
+            content_identity = (qmanifest.get("query_content_sha256"), qmanifest.get("fasta_sha256"))
+            if noise in shared_conditions and shared_conditions[noise] != content_identity:
+                raise ValueError(f"Methods do not consume shared query content for noise={noise}")
+            shared_conditions[noise] = content_identity
             expected_qid_digest = hashlib.sha256("\n".join(query_df["query_id"].tolist()).encode()).hexdigest()
             if expected_qid_digest != qmanifest.get("query_ids_sha256"):
                 raise ValueError(f"Query ID digest mismatch: {query_table}")
@@ -549,8 +560,7 @@ def load_prepared_baseline_benchmark(
                     checkpoint_path = checkpoint_info.get("path")
                     if checkpoint_path and Path(checkpoint_path).is_file():
                         log_artifact_path("baseline model checkpoint", checkpoint_path, extra=f"variant={variant}")
-                        if _sha256_path(Path(checkpoint_path)) != str(checkpoint_hash).lower():
-                            raise ValueError(f"Checkpoint hash mismatch for {pred_file}: {checkpoint_path}")
+                        # _verify_path_hash below checks each checkpoint once per load.
                 if not variant or not checkpoint_hash:
                     raise ValueError(f"CNN manifest must identify model_variant and checkpoint_sha256: {pred_file}")
                 if not isinstance(checkpoint_info, dict) or not checkpoint_info.get("path"):
@@ -632,7 +642,7 @@ def load_prepared_baseline_benchmark(
 
 
 
-def inspect_c03_package(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
+def inspect_c03_package(benchmark_dir: Union[str, Path], *, include_artifacts: bool = False) -> Dict[str, Any]:
     """Validate all 35 C03 conditions without executing a model or search tool.
 
     Reads materialized tables and hashes; unlike the generic preflight this is
@@ -654,6 +664,9 @@ def inspect_c03_package(benchmark_dir: Union[str, Path]) -> Dict[str, Any]:
             preparation_manifest={"path": str(prep_path), "sha256": _sha256_path(prep_path)},
             method_condition_count=len(artifacts.method_manifests or []),
             method_manifests=artifacts.method_manifests)
+        log_artifact_path("C03 preparation identity", prep_path, extra="sha256=" + report["preparation_manifest"]["sha256"])
+        if include_artifacts:
+            report["artifacts"] = artifacts
         if report["method_condition_count"] != 35:
             raise ValueError("Expected 35 complete C03 method conditions")
     except (OSError, ValueError, KeyError, TypeError) as exc:
