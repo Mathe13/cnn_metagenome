@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 8,
+  "next_id": 10,
   "lessons": [
     {
       "id": "L-001",
@@ -130,6 +130,42 @@
       ],
       "created": "2026-11-06T01:23:09Z",
       "last_seen": "2026-11-06T01:23:09Z"
+    },
+    {
+      "id": "L-008",
+      "key": "ac_gap::exercise every named notebook and each promised cli exit code before claiming compatibility",
+      "text": "Exercise every named notebook and each promised CLI exit code before claiming compatibility.",
+      "signal": "ac_gap",
+      "scope": "preflight",
+      "status": "candidate",
+      "features": [
+        "m00-reproduction-run-plan"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/m00-reproduction-run-plan/verification.md:C11,C17 (preflight)"
+      ],
+      "created": "2026-11-10T00:05:41Z",
+      "last_seen": "2026-11-10T00:05:41Z"
+    },
+    {
+      "id": "L-009",
+      "key": "ac_gap::turn malformed artifact container errors into per input blocked diagnostics and prove enumeration continues",
+      "text": "Turn malformed artifact container errors into per-input BLOCKED diagnostics and prove enumeration continues.",
+      "signal": "ac_gap",
+      "scope": "preflight",
+      "status": "candidate",
+      "features": [
+        "m00-reproduction-run-plan"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/m00-reproduction-run-plan/verification.md:C12 (preflight)"
+      ],
+      "created": "2026-11-10T00:05:41Z",
+      "last_seen": "2026-11-10T00:05:41Z"
     }
   ]
 }

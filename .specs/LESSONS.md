@@ -56,6 +56,18 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: verification.md C2; tests/test_c10_paired_umap.py:128 (latent)
 - last seen: 2026-11-06T01:23:09Z
 
+### L-008 - Exercise every named notebook and each promised CLI exit code before claiming compatibility.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `preflight` · harmful: 0
+- features: m00-reproduction-run-plan
+- evidence: .specs/features/m00-reproduction-run-plan/verification.md:C11,C17 (preflight)
+- last seen: 2026-11-10T00:05:41Z
+
+### L-009 - Turn malformed artifact container errors into per-input BLOCKED diagnostics and prove enumeration continues.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `preflight` · harmful: 0
+- features: m00-reproduction-run-plan
+- evidence: .specs/features/m00-reproduction-run-plan/verification.md:C12 (preflight)
+- last seen: 2026-11-10T00:05:41Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

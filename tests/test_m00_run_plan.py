@@ -162,6 +162,15 @@ class RunPlanTests(unittest.TestCase):
         self.assertNotEqual(Path(stage['output_dir']),path.parent)
         self.assertEqual(inspect_run_stage(plan,'short/06')['status'],'BLOCKED')
         self.assertEqual(path.read_text(),'{}')
+        c['stages'] = [{'notebook_id': 'short/06b', 'requirements': [],
+                        'resume_manifest': str(path), 'dependencies': [
+                            {'source': 'short/06', 'kind': 'external', 'manifest': str(path)}]}]
+        second = self.build('resume-06b', c)
+        stage_b = second['stages'][0]
+        self.assertEqual(stage_b['resume']['validation'], 'PENDING_C09')
+        self.assertNotEqual(Path(stage_b['output_dir']), path.parent)
+        self.assertEqual(inspect_run_stage(second, 'short/06b')['status'], 'BLOCKED')
+        self.assertEqual(path.read_text(), '{}')
 
     def test_metadata_requirements(self):
         data=self.root/'input.parquet';pd.DataFrame({'wrong':[1]}).to_parquet(data)
@@ -174,6 +183,17 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(len(report['requirements']),2)
         self.assertIn('sequence',report['requirements'][0]['detail'])
         self.assertIn('missing',report['requirements'][1]['detail'])
+        invalid_xlsx = self.root / 'invalid.xlsx'
+        invalid_xlsx.write_text('not an XLSX container')
+        extra = {'stages': [{'notebook_id': 'short/05', 'requirements': [
+            {'path': str(invalid_xlsx), 'kind': 'xlsx', 'sheets': ['MSL']},
+            {'path': str(self.root / 'absent.csv'), 'kind': 'csv', 'columns': ['id']}]}]}
+        malformed = inspect_run_stage(self.build('xlsx-invalid', extra), 'short/05')
+        self.assertEqual(malformed['status'], 'BLOCKED')
+        self.assertEqual(len(malformed['requirements']), 2)
+        self.assertEqual([r['status'] for r in malformed['requirements']], ['BLOCKED', 'BLOCKED'])
+        self.assertIn('zip', malformed['requirements'][0]['detail'].lower())
+        self.assertIn('missing', malformed['requirements'][1]['detail'])
 
     def test_dependency_gate(self):
         planned=self.build();self.assertEqual(inspect_run_stage(planned,'short/08')['status'],'BLOCKED')
@@ -220,6 +240,16 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(blocked.returncode,2);self.assertEqual(json.loads(blocked.stdout)['status'],'BLOCKED')
         legacy=self.cli('preflight_notebook.py','short/01','--data-root',self.root,'--smoke-test')
         self.assertEqual(legacy.returncode,2);self.assertTrue(json.loads(legacy.stdout)['is_smoke_test'])
+        data = self.root / 'cnn_kraken/processed_kraken_species_splited_parquet'
+        data.mkdir(parents=True)
+        pd.DataFrame({'sequence_padded': ['ACGT'], 'label': [0]}).to_parquet(data / 'test.parquet')
+        checkpoint = self.root / 'cnn_kraken_species/checkpoints/best_resnet_classifier__fast_phase4.pt'
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b'synthetic metadata-only placeholder; never loaded as weights')
+        legacy_ready = self.cli('preflight_notebook.py', 'short/01', '--data-root', self.root, '--smoke-test')
+        self.assertEqual(legacy_ready.returncode, 0, legacy_ready.stderr)
+        self.assertEqual(json.loads(legacy_ready.stdout)['status'], 'READY')
+        self.assertTrue(json.loads(legacy_ready.stdout)['is_smoke_test'])
 
     def test_documented_limits(self):
         text=(ROOT/'README.md').read_text()

@@ -12,6 +12,7 @@ import os
 import subprocess
 import uuid
 from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -254,7 +255,7 @@ def _inspect_requirement(spec: dict[str, Any]) -> dict[str, Any]:
             with path.open('rb'):
                 pass
         return {**spec, 'status': 'READY', 'detail': detail}
-    except (OSError, ValueError, ImportError, KeyError, ParseError) as exc:
+    except (OSError, ValueError, ImportError, KeyError, ParseError, BadZipFile) as exc:
         return {**spec, 'status': 'BLOCKED', 'detail': str(exc)}
 
 

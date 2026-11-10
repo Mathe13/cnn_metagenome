@@ -37,7 +37,7 @@
 ## Handoff
 **Feature**: m00-reproduction-run-plan
 **Where**: plano aprovado pelo usuário; 18 checks definidos antes do código, perfil light. Implementação com 91 testes locais verdes (31 M00/runtime e 60 C02/C06/C09); base da feature `9fdaefe9860f75293ce90e38daf6932335026b0f`.
-**In progress**: commit local da M00 e Verifier independente obrigatório após o commit.
+**In progress**: rodada 1 do Verifier identificou lacunas C11/C17 e erro XLSX C12; reparo com reforço das provas, reverificação pendente.
 **Next step**: concluir verificação M00 e depois implementar M01, mantendo as correções 05/09 e adoção dos namespaces no escopo das respectivas fases.
 **Blockers**: preflight remoto e execução empírica pendentes; Parquets/checkpoints canônicos do cluster não estão montados. Planos BLOCKED são diagnóstico, não reprodução.
 **Uncommitted**: arquivos M00 e artefatos preexistentes não relacionados; não adicionar saídas históricas ao commit.

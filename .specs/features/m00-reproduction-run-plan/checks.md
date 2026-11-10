@@ -100,3 +100,5 @@ Um builder. Arquivos existentes runtime/CLI/teste C00/README = 71.060 bytes / 4 
 - **Boundary:** C1–C18 implementados e 31 testes M00/C00/runtime verdes; 60 testes de regressão C02/C06/C09 verdes.
 - **Settled mid-build:** plano administrativo não altera os produtores; 06b é aceito pela CLI com plano sem mudar o registro legado de 15 notebooks. A configuração padrão enumera explicitamente as 16 etapas.
 - **Abandoned:** nenhuma execução empírica, treinamento, migração de manifestos antigos ou ajuste dos resultados históricos.
+
+- **Review round 1:** Verifier no commit `e560655` comprovou 15/18 checks e apontou falta dos casos 06b e READY legado, além de BadZipFile não tratado. As provas C11/C12/C17 foram ampliadas sem remover asserções ou alterar claims; captura de BadZipFile mantém a enumeração de requisitos. Reverificação independente pendente após commit do reparo.
