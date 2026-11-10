@@ -142,14 +142,16 @@ A ordem entre fases é estrita. Além da ordem, dependências de implementação
 
 **Done when**:
 
-- [ ] 150 células preservadas; diferenças em pontos percentuais com bootstrap por espécie; vazio/espécie única têm IC indisponível; sinal e pareamento conferidos contra valores literais.
-- [ ] Provas C21–C23 implementadas com a tarefa; nenhum teste exigido é adiado.
-- [ ] Mínimo de 3 métodos novos de teste ou equivalentes subtests explicitamente registrados.
-- [ ] Gate Quick passa; contagem real e resultado registrados antes do commit.
+- [x] 150 células preservadas; diferenças em pontos percentuais com bootstrap por espécie; vazio/espécie única têm IC indisponível; sinal e pareamento conferidos contra valores literais.
+- [x] Provas C21–C23 implementadas com a tarefa; nenhum teste exigido é adiado.
+- [x] Mínimo de 3 métodos novos de teste ou equivalentes subtests explicitamente registrados.
+- [x] Gate Quick passa; contagem real e resultado registrados antes do commit.
 
 **Tests**: unit
 **Gate**: Quick
 **Commit**: `feat(m02): add paired species bootstrap difference panels`
+
+**Result**: 3 testes passaram: 150 deltas pareados, ICs indisponíveis e figura regenerada de CSV.
 
 ### T5: Notebook 01 no ciclo M02
 

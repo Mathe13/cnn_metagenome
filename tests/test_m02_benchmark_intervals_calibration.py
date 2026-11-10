@@ -278,3 +278,29 @@ class M02Tests(unittest.TestCase):
             self.assertEqual(r['source_sha256'],sha(src))
             for k,magic in [('png',b'\x89PNG'),('pdf',b'%PDF')]:
                 p=Path(r[k]);self.assertTrue(p.read_bytes().startswith(magic));self.assertEqual(outputs[str(p)]['sha256'],sha(p))
+
+    def test_paired_difference_grid(self):
+        from viral_cnn.baselines.benchmark_plotting import paired_differences
+        truth,pred,masks=self.plot_data();df=paired_differences(truth,pred,masks)
+        self.assertEqual(len(df),150)
+        row=df[(df.method_a=='resnet50_species')&(df.method_b=='BLASTN')&(df.noise_rate==0)&(df.stratum=='all')].iloc[0]
+        self.assertEqual(row.diff_mean_pp,75.);self.assertEqual(row.resampling_unit,'species')
+        self.assertEqual(row.repeats,2000);self.assertEqual(row.seed,42)
+        self.assertEqual(row.ci_status,'available');self.assertLessEqual(row.ci_lower_pp,75.);self.assertGreaterEqual(row.ci_upper_pp,75.)
+        self.assertEqual(set(zip(df.method_a,df.method_b)),{(a,b) for a in METHODS[:5] for b in METHODS[-2:]})
+
+    def test_paired_unavailable_intervals(self):
+        from viral_cnn.baselines.benchmark_plotting import paired_differences
+        truth,pred,masks=self.plot_data();masks['overlap']=np.zeros(4,dtype=bool);masks['no_exact_overlap']=truth==0
+        df=paired_differences(truth,pred,masks)
+        empty=df[df.stratum=='overlap'];single=df[df.stratum=='no_exact_overlap']
+        self.assertTrue((empty.ci_reason=='empty_stratum').all());self.assertTrue(empty.diff_mean_pp.isna().all())
+        self.assertTrue((single.ci_reason=='fewer_than_two_species').all());self.assertTrue(single.diff_mean_pp.notna().all())
+        self.assertTrue(df[df.stratum!='all'].ci_lower_pp.isna().all());self.assertTrue(df[df.stratum!='all'].ci_upper_pp.isna().all())
+
+    def test_paired_figure_from_csv(self):
+        from viral_cnn.baselines.benchmark_plotting import paired_differences, render_differences
+        truth,pred,masks=self.plot_data();src=self.root/'deltas.csv';paired_differences(truth,pred,masks).to_csv(src,index=False)
+        r=render_differences(src,self.root)
+        self.assertEqual(r['source_sha256'],sha(src));self.assertTrue(Path(r['png']).read_bytes().startswith(b'\x89PNG'))
+        self.assertTrue(Path(r['pdf']).read_bytes().startswith(b'%PDF'))
