@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 10,
+  "next_id": 11,
   "lessons": [
     {
       "id": "L-001",
@@ -166,6 +166,24 @@
       ],
       "created": "2026-11-10T00:05:41Z",
       "last_seen": "2026-11-10T00:05:41Z"
+    },
+    {
+      "id": "L-010",
+      "key": "ac_gap::quando uma claim cobre varios entrypoints fontes ou modos afirme seus caminhos e valores em cada membro e recalcule identidades dos arquivos presenca de campos e um fluxo verde nao provam a matriz inteira",
+      "text": "Quando uma claim cobre vários entrypoints, fontes ou modos, afirme seus caminhos e valores em cada membro e recalcule identidades dos arquivos; presença de campos e um fluxo verde não provam a matriz inteira.",
+      "signal": "ac_gap",
+      "scope": "notebooks/provenance",
+      "status": "candidate",
+      "features": [
+        "m01-data-taxonomy-split"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/m01-data-taxonomy-split/verification-round1.md (notebooks/provenance)"
+      ],
+      "created": "2026-11-10T00:29:42Z",
+      "last_seen": "2026-11-10T00:29:42Z"
     }
   ]
 }

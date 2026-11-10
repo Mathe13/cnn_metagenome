@@ -1,6 +1,7 @@
 """M01 scientific contracts, derived from the approved checks before implementation."""
 import contextlib
 import csv
+import hashlib
 import io
 import json
 import os
@@ -80,16 +81,65 @@ class M01Tests(unittest.TestCase):
     def test_paths(self):
         config=self.root/'config.yaml';config.write_text(yaml.safe_dump(self.settings))
         alternate=self.root/'alternate.csv';alternate.write_bytes(self.mapping.read_bytes())
-        with patch.dict(os.environ,{'ORIGINAL_MAPPING_PATH':str(alternate),'DATA_ROOT':str(self.root)}):
+        alternate_tax=self.root/'alternate.parquet';alternate_tax.write_bytes(self.taxonomy.read_bytes())
+        workbook=self.workbook()
+        selected={'ORIGINAL_MAPPING_PATH':str(alternate),'TAXONOMY_PATH':str(alternate_tax),
+                  'ICTV_MASTER_PATH':str(workbook),'DATA_ROOT':str(self.root),'LOG_PATH':'true'}
+        with patch.dict(os.environ,selected),contextlib.redirect_stderr(io.StringIO()) as log:
             resolved=resolve_m01_inputs('short/10',self.root,config_path=config)
-        self.assertEqual(resolved['original_mapping'],str(alternate))
-        self.assertEqual(resolved['splits']['validation'],self.paths['validation'])
+            self.assertEqual(resolved['original_mapping'],str(alternate))
+            self.assertEqual(resolved['splits']['validation'],self.paths['validation'])
+            ten=self.execute_notebook('10_',self.settings)
+            source=str(Path(ten['output_dir'])/'manifest.json')
+            with patch.dict(os.environ,{'OVERLAP_MANIFEST':source}):
+                eleven=self.execute_notebook('11_',self.settings)
+                five=self.execute_notebook('05_',self.settings)
+            for manifest in [ten,eleven,five]:
+                self.assertEqual(manifest['configuration']['original_mapping'],str(alternate))
+                self.assertEqual(manifest['configuration']['taxonomy_path'],str(alternate_tax))
+                self.assertEqual(manifest['configuration']['ictv_master'],str(workbook))
+            self.assertEqual(eleven['configuration']['overlap_manifest'],source)
+            self.assertTrue(eleven['metrics_summary']['mapping_integrity_ok'])
+            self.assertEqual(five['protocol_id'],'m01_ictv_curate_v1')
+            for path in [str(alternate),str(alternate_tax),str(workbook),source]:self.assertIn(path,log.getvalue())
+        # Default topology is resolved from DATA_ROOT, without relying on any legacy outputs.
+        base=self.root/'cnn_kraken/processed_kraken_species_splited_parquet';base.mkdir(parents=True)
+        for split,name in [('train','train'),('validation','val'),('test','test')]:
+            pd.read_csv(self.paths[split],keep_default_na=False).to_parquet(base/(name+'.parquet'),index=False)
+        for stage in ['short/10','short/11','short/05']:
+            defaults=resolve_m01_inputs(stage,self.root,settings={'data_root':str(self.root)})
+            self.assertEqual(defaults['original_mapping'],str(self.root/'dataset_kraken/species_name_ids.csv'))
+            self.assertEqual(defaults['ictv_master'],str(self.root/'short/ICTV_Master_Species_List_2025_MSL41.v1.xlsx'))
+            if stage=='short/10':self.assertEqual(defaults['splits']['validation'],[str(base/'val.parquet')])
+        # Selected M00 sources beat configuration/environment overrides at all three entries.
+        from viral_cnn.run_planning import build_run_plan
+        spec={'data_root':str(self.root),'reference_roots':[],'stages':[]}
+        for stage in ['short/10','short/11','short/05']:
+            values=dict(self.settings)
+            if stage=='short/05':values['mode']='audit_existing'
+            item={'notebook_id':stage,'m01':values,'requirements':[]}
+            if stage!='short/10':item['dependencies']=[{'source':'short/10','kind':'planned'}]
+            spec['stages'].append(item)
+        cfg=self.root/'pinned.yaml';cfg.write_text(yaml.safe_dump(spec))
+        plan=build_run_plan(cfg,self.root,run_id='pinned')
+        for stage in ['short/10','short/11','short/05']:
+            m=run_m01(stage,self.root,run_plan=plan['plan_path'])
+            self.assertEqual(m['configuration']['original_mapping'],str(self.mapping))
+            self.assertEqual(m['configuration']['taxonomy_path'],str(self.taxonomy))
+            with patch.dict(os.environ,{'ORIGINAL_MAPPING_PATH':str(alternate)}),self.assertRaisesRegex(ValueError,'Override conflicts'):
+                resolve_m01_inputs(stage,self.root,run_plan=plan['plan_path'])
 
     def test_isolation(self):
-        before=self.mapping.read_bytes(),self.taxonomy.read_bytes()
-        a,b=self.overlap(),self.overlap()
-        self.assertNotEqual(a['output_dir'],b['output_dir'])
-        self.assertEqual(before,(self.mapping.read_bytes(),self.taxonomy.read_bytes()))
+        sentinel=self.root/'results_reproduction/historical/report.json'
+        sentinel.parent.mkdir(parents=True);sentinel.write_text('historical evidence')
+        sources=[self.mapping,self.taxonomy,sentinel,*map(Path,self.paths.values())]
+        before={str(p):p.read_bytes() for p in sources}
+        for stage in ['short/10','short/11','short/05']:
+            if stage=='short/10':a,b=self.overlap(),self.overlap()
+            elif stage=='short/11':a,b=self.audit(),self.audit()
+            else:a,b=self.run_stage(stage,mode='audit_existing'),self.run_stage(stage,mode='audit_existing')
+            self.assertNotEqual(a['output_dir'],b['output_dir'])
+            self.assertEqual(before,{str(p):p.read_bytes() for p in sources})
 
     def make_plan(self):
         target=self.root/'results_reproduction/runs/child/short/10';target.mkdir(parents=True)
@@ -119,6 +169,11 @@ class M01Tests(unittest.TestCase):
             run_m01('short/10',self.root,run_plan=p,settings={'original_mapping':'conflicting.csv'})
 
     def test_manifests(self):
+        protocols={'short/10':'m01_fragment_split_audit_v1','short/11':'m01_taxonomy_split_audit_v1',
+                   'short/05':'m01_existing_taxonomy_audit_v1'}
+        expected_outputs={'short/10':{'decision.json','per_species.csv','split_counts.csv','split_class_counts.csv','split_lengths.csv'},
+                          'short/11':{'taxonomy_audit.json','per_taxon.csv','per_genus.csv','per_family.csv','per_order.csv','rank_validation.csv'},
+                          'short/05':{'curation_audit.json','rank_validation.csv','class_validation.csv'}}
         for stage in ['short/10','short/11','short/05']:
             if stage=='short/11':m=self.audit()
             elif stage=='short/05':m=self.run_stage(stage,mode='audit_existing')
@@ -127,9 +182,25 @@ class M01Tests(unittest.TestCase):
             for key in ['protocol_id','configuration','library_versions','git_commit','git_dirty','seed','inputs','outputs']:
                 self.assertIn(key,m)
             self.assertEqual(m['seed'],42)
+            self.assertFalse(m['is_smoke_test']);self.assertEqual(m['evidence']['status'],'observed')
+            self.assertEqual(m['protocol_id'],protocols[stage])
+            self.assertEqual(m['configuration']['original_mapping'],str(self.mapping))
+            self.assertEqual(m['configuration']['data_root'],str(self.root))
+            self.assertEqual(m['configuration']['mode'],'audit_existing' if stage=='short/05' else 'curate')
+            self.assertEqual(m['library_versions']['pandas'],pd.__version__)
+            self.assertEqual(json.loads((Path(m['output_dir'])/'manifest.json').read_text()),m)
             self.assertTrue(m['inputs']);self.assertTrue(m['outputs'])
             self.assertTrue(all(x['sha256']!='unknown' for x in m['inputs']))
             self.assertTrue(all(x['sha256']!='unknown' for x in m['outputs']))
+            self.assertEqual({Path(r['path']).name for r in m['outputs']},expected_outputs[stage])
+            for record in m['inputs']+m['outputs']:
+                path=Path(record['path'])
+                self.assertTrue(path.is_absolute());self.assertTrue(path.is_file())
+                self.assertEqual(record['sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
+                self.assertEqual(record['size_bytes'],path.stat().st_size)
+            self.assertIn(str(self.mapping),[r['path'] for r in m['inputs']])
+            if stage=='short/10':self.assertTrue(set(self.paths.values()).issubset(r['path'] for r in m['inputs']))
+            else:self.assertIn(str(self.taxonomy),[r['path'] for r in m['inputs']])
 
     def test_split_counts(self):
         m=self.execute_notebook('10_',self.settings)
@@ -140,8 +211,14 @@ class M01Tests(unittest.TestCase):
         val=next(r for r in rows if r['split']=='validation')
         self.assertEqual(int(val['empty_after_padding']),1)
         cls=pd.read_csv(out/'split_class_counts.csv');self.assertEqual(cls['rows'].sum(),12)
+        self.assertEqual({(r.split,r.model_label):r.rows for r in cls.itertuples()},
+                         {('train',0):2,('train',1):1,('validation',0):1,('validation',1):2,('test',0):3,('test',1):3})
+        self.assertEqual({r['split']:(int(r['empty_after_padding']),int(r['no_acgt']),int(r['over_512_bp']),int(r['benchmark_compatible'])) for r in rows},
+                         {'train':(0,0,0,3),'validation':(1,0,1,1),'test':(1,1,0,4)})
         lengths=pd.read_csv(out/'split_lengths.csv')
         self.assertEqual(int(lengths.loc[(lengths.split=='validation')&(lengths.length==513),'rows'].iloc[0]),1)
+        self.assertEqual({(r.split,r.length):r.rows for r in lengths.itertuples()},
+                         {('train',4):3,('validation',0):1,('validation',2):1,('validation',513):1,('test',0):1,('test',4):5})
 
     def test_orientations(self):
         d=self.overlap()['metrics_summary']
@@ -186,6 +263,18 @@ class M01Tests(unittest.TestCase):
         df=pd.read_csv(species);df['test_rows']+=1;df.to_csv(species,index=False)
         with self.assertRaises(ValueError):self.run_stage('short/11',overlap_manifest=str(Path(m['output_dir'])/'manifest.json'))
 
+        for field,message in [('test_rows','test total'),('exact_test_matches_train','match total')]:
+            m=self.overlap();output=Path(m['output_dir'])
+            decision=output/'decision.json';d=json.loads(decision.read_text());d[field]+=1;decision.write_text(json.dumps(d))
+            manifest_path=output/'manifest.json';selected=json.loads(manifest_path.read_text())
+            for record in selected['outputs']:
+                if record['path']==str(decision):
+                    record['sha256']=hashlib.sha256(decision.read_bytes()).hexdigest()
+                    record['size_bytes']=decision.stat().st_size
+            manifest_path.write_text(json.dumps(selected))
+            with self.subTest(field=field),self.assertRaisesRegex(ValueError,message):
+                self.run_stage('short/11',overlap_manifest=str(manifest_path))
+
     def test_ranks(self):
         for rank in ['Genus','Order']:
             for bad in [None,'','Unassigned_'+rank,'Unclassified Parent']:
@@ -219,6 +308,7 @@ class M01Tests(unittest.TestCase):
         with patch('viral_cnn.taxonomy.curation.generate_synthetic_taxonomy',side_effect=AssertionError('forbidden')):
             with self.assertRaises(FileNotFoundError):self.execute_notebook('05_',dict(self.settings,ictv_master='missing.xlsx'))
         self.assertFalse(list(self.root.glob('results_reproduction/runs/**/*.parquet')))
+        self.assertTrue(all(json.loads(p.read_text())['status']=='FAILED' for p in self.root.glob('results_reproduction/runs/**/manifest.json')))
 
     def test_invalid_workbook(self):
         for case in ['missing_sheet','missing_rank','invalid_ids']:
@@ -231,6 +321,7 @@ class M01Tests(unittest.TestCase):
             else:pd.DataFrame({'id':[1,1],'species':['Alpha','Beta']}).to_csv(self.mapping,index=False)
             with self.subTest(case=case),self.assertRaises(ValueError):self.run_stage('short/05',ictv_master=str(p))
         self.assertFalse(list(self.root.glob('results_reproduction/runs/**/*.parquet')))
+        self.assertTrue(all(json.loads(p.read_text())['status']=='FAILED' for p in self.root.glob('results_reproduction/runs/**/manifest.json')))
 
     def test_curate(self):
         p=self.workbook();m=self.run_stage('short/05',ictv_master=str(p))
@@ -240,6 +331,22 @@ class M01Tests(unittest.TestCase):
         self.assertEqual(df.model_label.tolist(),[0,1]);self.assertEqual(df.species.tolist(),['Alpha','Beta'])
         self.assertEqual(df.Genus.tolist(),['G1','G2']);self.assertTrue(m['metrics_summary']['hierarchy_ready'])
         self.assertIn(str(p),[i['path'] for i in m['inputs']])
+
+        master=pd.read_excel(p,sheet_name='MSL').iloc[:1]
+        with pd.ExcelWriter(p,mode='a',if_sheet_exists='replace',engine='openpyxl') as writer:
+            master.to_excel(writer,sheet_name='MSL',index=False)
+        ncbi=self.root/'ncbi_local.csv'
+        pd.DataFrame({'species':['Beta'],'Genus':['LocalGenus'],'Order':['LocalOrder'],'Family':['LocalFamily']}).to_csv(ncbi,index=False)
+        m=self.run_stage('short/05',ictv_master=str(p),ncbi_taxonomy=str(ncbi))
+        df=pd.read_parquet(Path(m['output_dir'])/'main_taxonomy_hybrid_CLEANSED.parquet')
+        self.assertEqual(df.model_label.tolist(),[0,1]);self.assertEqual(df.species.tolist(),['Alpha','Beta'])
+        self.assertEqual(df.Genus.tolist(),['G1','LocalGenus'])
+        self.assertEqual(df.Order.tolist(),['O1','LocalOrder'])
+        self.assertEqual(df.taxonomy_source.tolist(),['ICTV Master','NCBI Fallback'])
+        sources={r['path']:r for r in m['inputs']}
+        for path in [self.mapping,p,ncbi]:
+            self.assertIn(str(path),sources)
+            self.assertEqual(sources[str(path)]['sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
 
     def test_synthetic(self):
         m=self.execute_notebook('05_',self.settings,smoke=True)
@@ -256,12 +363,22 @@ class M01Tests(unittest.TestCase):
             self.assertEqual(m['metrics_summary']['genome_provenance'],'unknown')
 
     def test_logging(self):
-        for enabled in ['true','0','false']:
+        workbook=self.workbook();ncbi=self.root/'fallback.csv'
+        pd.DataFrame({'species':['Beta'],'Genus':['LocalGenus'],'Order':['LocalOrder']}).to_csv(ncbi,index=False)
+        for enabled in [None,'true','0','false']:
             stream=io.StringIO()
-            with patch.dict(os.environ,{'LOG_PATH':enabled}),contextlib.redirect_stderr(stream):self.overlap()
+            with patch.dict(os.environ,{'LOG_PATH':enabled or 'true'}):
+                if enabled is None:os.environ.pop('LOG_PATH')
+                with contextlib.redirect_stderr(stream):
+                    ten=self.overlap();out=Path(ten['output_dir']);source=str(out/'manifest.json')
+                    self.run_stage('short/11',overlap_manifest=source)
+                    self.run_stage('short/05',ictv_master=str(workbook),ncbi_taxonomy=str(ncbi))
+                    self.run_stage('short/05',mode='audit_existing',overlap_manifest=source)
             text=stream.getvalue()
-            if enabled=='true':
-                for path in [str(self.mapping),*self.paths.values()]:self.assertIn(path,text)
+            if enabled in (None,'true'):
+                for path in [str(self.mapping),*self.paths.values(),str(self.taxonomy),source,
+                             str(out/'decision.json'),str(out/'per_species.csv'),str(workbook),str(ncbi)]:
+                    self.assertIn(path,text)
             else:self.assertNotIn('[LOG_PATH]',text)
 
     def test_real_m00_chain(self):

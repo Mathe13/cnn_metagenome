@@ -68,6 +68,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: .specs/features/m00-reproduction-run-plan/verification.md:C12 (preflight)
 - last seen: 2026-11-10T00:05:41Z
 
+### L-010 - Quando uma claim cobre vários entrypoints, fontes ou modos, afirme seus caminhos e valores em cada membro e recalcule identidades dos arquivos; presença de campos e um fluxo verde não provam a matriz inteira.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `notebooks/provenance` · harmful: 0
+- features: m01-data-taxonomy-split
+- evidence: .specs/features/m01-data-taxonomy-split/verification-round1.md (notebooks/provenance)
+- last seen: 2026-11-10T00:29:42Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
