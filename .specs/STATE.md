@@ -36,9 +36,9 @@
 
 ## Handoff
 **Feature**: m00-reproduction-run-plan
-**Where**: plano aprovado pelo usuário; 18 checks definidos antes do código, perfil light. Implementação com 91 testes locais verdes (31 M00/runtime e 60 C02/C06/C09); base da feature `9fdaefe9860f75293ce90e38daf6932335026b0f`.
-**In progress**: rodada 1 do Verifier identificou lacunas C11/C17 e erro XLSX C12; reparo com reforço das provas, reverificação pendente.
-**Next step**: concluir verificação M00 e depois implementar M01, mantendo as correções 05/09 e adoção dos namespaces no escopo das respectivas fases.
-**Blockers**: preflight remoto e execução empírica pendentes; Parquets/checkpoints canônicos do cluster não estão montados. Planos BLOCKED são diagnóstico, não reprodução.
-**Uncommitted**: arquivos M00 e artefatos preexistentes não relacionados; não adicionar saídas históricas ao commit.
+**Where**: M00 concluída, perfil light, Verifier independente PASS em `f097c42`: 18/18 checks comprovados, 22 testes M00 reexecutados pelo Verifier e gate 0 erros/avisos. Autor executou 91 testes locais no total (31 M00/C00/runtime e 60 C02/C06/C09). Commit concorrente `c26635a` adiciona apenas o roadmap, preservado sem alteração de código.
+**In progress**: preflight remoto e reprodução empírica não executados; os namespaces ainda precisam ser adotados pelos produtores nas próximas fases.
+**Next step**: iniciar plano M01: parametrização/isolamento de 10/11/05, falha explícita sem planilha ICTV em modo empírico e auditoria de taxonomia/split; depois seguir M02–M07 antes da rodada integral.
+**Blockers**: dados Parquet/checkpoints canônicos do cluster não montados. Planos BLOCKED são diagnóstico; READY de metadados não certifica evidência científica.
+**Uncommitted**: artefatos históricos e bundle preexistentes fora do escopo, preservados. Nenhum resultado científico novo da M00.
 **Branch**: main

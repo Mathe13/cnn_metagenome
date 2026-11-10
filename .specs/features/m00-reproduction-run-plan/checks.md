@@ -102,3 +102,5 @@ Um builder. Arquivos existentes runtime/CLI/teste C00/README = 71.060 bytes / 4 
 - **Abandoned:** nenhuma execução empírica, treinamento, migração de manifestos antigos ou ajuste dos resultados históricos.
 
 - **Review round 1:** Verifier no commit `e560655` comprovou 15/18 checks e apontou falta dos casos 06b e READY legado, além de BadZipFile não tratado. As provas C11/C12/C17 foram ampliadas sem remover asserções ou alterar claims; captura de BadZipFile mantém a enumeração de requisitos. Reverificação independente pendente após commit do reparo.
+
+- **Boundary final:** C1–C18 comprovados por Verifier independente em `f097c42`, rodada 2 scoped, perfil light PASS; 22 provas M00 verdes e validate_verification com 0 erros/avisos. Falhas da rodada 1 permanecem documentadas no histórico e nas lições L-008/L-009. Preflight remoto e validação empírica seguem pendentes.
