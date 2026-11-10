@@ -38,9 +38,9 @@
 
 ## Handoff
 **Feature**: m01-data-taxonomy-split
-**Where**: Plano aprovado, 23 checks derivados e implementação local concluída; revisão independente pendente após commit.
-**In progress**: verificação light independente; preflight remoto e validação empírica integral não executados.
-**Next step**: validar todos os checks pelo Verifier e executar o gate; somente depois preparar M02 conforme o roadmap.
-**Blockers**: planilha MSL41.v1 e híbrido canônico ausentes localmente; proveniência dos Parquets locais não demonstrada. Nenhum checkpoint foi carregado e nenhum resultado do artigo foi reproduzido.
-**Uncommitted**: alterações M01 de código, notebooks, configurações, documentação e contratos; saídas históricas preservadas.
+**Where**: M01 implementada em `21dfc84`, provas ampliadas em `c6821ad`; Verifier independente PASS 23/23, perfil light, rodada 2 scoped. 27 provas M01 reexecutadas no HEAD corrigido e 57 regressões verificadas na rodada 1, total 84 testes; gate com zero erros/avisos.
+**In progress**: preflight remoto e validação empírica integral não executados. A auditoria de referência existente é protocolo distinto da curadoria MSL; nenhum número do artigo foi reproduzido.
+**Next step**: M02 conforme roadmap; antes da rodada integral, selecionar fontes canônicas verificadas e executar preflight por etapa. Nunca consumir os Parquets locais afetados abaixo como evidência empírica.
+**Blockers**: planilha MSL41.v1 e híbrido canônico ausentes localmente; checkpoints não eram necessários e não foram carregados. No início do BUILD, execução smoke do notebook 05 ainda legado sobrescreveu sete Parquets ignorados de Species/Genus e teste long; conteúdo anterior não foi hashado e não pode ser restaurado por evidência desta sessão. CSVs de classes preservados por hashes confirmados. Incidente em `docs/m01_data_taxonomy_split.md`, relatório e L-011; novo fluxo e testes usam namespaces isolados.
+**Uncommitted**: nenhuma alteração de implementação pendente; fechamento documental/revisão e lições registrados no commit final, sem saída científica nova versionada.
 **Branch**: main

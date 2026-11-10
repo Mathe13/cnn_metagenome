@@ -74,6 +74,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: .specs/features/m01-data-taxonomy-split/verification-round1.md (notebooks/provenance)
 - last seen: 2026-11-10T00:29:42Z
 
+### L-011 - Antes de executar smoke de notebook legado, inspecione todos os geradores e force DATA_ROOT e raiz de saída temporários; arquivos ignorados também podem ser sobrescritos e não têm restauração garantida pelo Git.
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `notebooks/testing` · harmful: 0
+- features: m01-data-taxonomy-split
+- evidence: docs/m01_data_taxonomy_split.md:69 (notebooks/testing)
+- last seen: 2026-11-10T00:34:50Z
+
 ## Quarantined (failed when applied - ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
