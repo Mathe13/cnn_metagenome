@@ -178,6 +178,37 @@ def _panel(frames: dict[str, pd.DataFrame], names: dict[str, str], method: str,
     return colors
 
 
+def _selective_panel(frames: dict[str, pd.DataFrame], names: dict[str, str], method: str,
+                     path: Path, highlighted: set[str], colors: dict[str, str]) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    sorted_highlighted = sorted(highlighted)
+    fig, axes = plt.subplots(1, 5, figsize=(22, 5))
+    try:
+        for ax, name in zip(axes, MODEL_NAMES):
+            frame = frames[name]
+            bg = frame[~frame['Genus'].isin(highlighted)]
+            if not bg.empty:
+                ax.scatter(bg['umap_1'], bg['umap_2'], color='#d0d0d0', s=10, alpha=0.35, label='_nolegend_')
+            for genus in sorted_highlighted:
+                subset = frame[frame['Genus'] == genus]
+                if not subset.empty:
+                    ax.scatter(subset['umap_1'], subset['umap_2'], color=colors[genus], s=20, alpha=0.85)
+            ax.set_title(f'{names[name]}\n{method} (selective) · N={len(frame)}')
+            ax.set_xlabel(f'{method} 1')
+            ax.set_ylabel(f'{method} 2')
+        handles = [Patch(color=colors[g], label=g) for g in sorted_highlighted]
+        if any((~frames[m]['Genus'].isin(highlighted)).any() for m in MODEL_NAMES):
+            handles.append(Patch(color='#d0d0d0', label='Outros gêneros (fundo)'))
+        fig.legend(handles=handles, loc='lower center', ncol=min(6, len(handles)), title='Gêneros selecionados')
+        fig.suptitle('QUALITATIVE ONLY — amostra pareada; gêneros selecionados sobre fundo neutro; sem inferência filogenética.')
+        fig.subplots_adjust(bottom=0.26, top=0.78, wspace=0.35)
+        _atomic(path, lambda p: fig.savefig(p, format='png', dpi=150))
+    finally:
+        plt.close(fig)
+
+
 def run_paired_umap(model_specs: list[dict[str, Any]], features: dict[str, Any],
                     labels: dict[str, np.ndarray], row_ids: dict[str, np.ndarray],
                     species_to_genus: dict[int, str], resume: LatentResumeCache,
@@ -246,12 +277,54 @@ def run_paired_umap(model_specs: list[dict[str, Any]], features: dict[str, Any],
             _csv(frame, path, projection=True)
         frames[name] = frame
         outputs[name] = dict(_file_record(path), embedding_sha256=specs[name]['test_artifact_sha256'])
+    # Deterministic highlighted genera selection and CSV exports
+    genera = sorted(frames[MODEL_NAMES[0]]['Genus'].unique())
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
+    palette = plt.get_cmap('tab20' if len(genera) <= 20 else 'turbo')
+    colors = {genus: to_hex(palette(i / max(1, len(genera) - 1))) for i, genus in enumerate(genera)}
+
+    counts = sample.frame['Genus'].value_counts()
+    sorted_genera = sorted(counts.index, key=lambda g: (-int(counts[g]), str(g)))
+    max_highlight = min(10, len(sorted_genera))
+    highlighted_set = set(sorted_genera[:max_highlight])
+
+    selected_genera_df = pd.DataFrame([
+        {
+            'Genus': g,
+            'color': colors.get(g, '#d0d0d0'),
+            'sample_count': int(counts[g]),
+            'selection_rank': i + 1,
+            'is_highlighted': g in highlighted_set,
+        }
+        for i, g in enumerate(sorted_genera)
+    ])
+    selected_genera_path = resume.output_dir / 'selected_genera.csv'
+    _csv(selected_genera_df, selected_genera_path)
+
+    sampled_queries_df = pd.DataFrame({
+        'query_id': sample.frame['row_id'].to_numpy(dtype=str),
+        'label': sample.frame['label'].to_numpy(dtype=int),
+        'Genus': sample.frame['Genus'].to_numpy(dtype=str),
+        'is_highlighted': sample.frame['Genus'].isin(highlighted_set).to_numpy(dtype=bool),
+    })
+    sampled_queries_path = resume.output_dir / 'sampled_query_ids.csv'
+    _csv(sampled_queries_df, sampled_queries_path)
+
+    selective_panel_path = resume.output_dir / 'umap_selective_panel.png'
+    _selective_panel(frames, {m['name']: m['display'] for m in model_specs}, method, selective_panel_path, highlighted_set, colors)
+
     panel_path = resume.output_dir / 'umap_comparison.png'
-    colors = _panel(frames, {m['name']: m['display'] for m in model_specs}, method, panel_path)
+    _panel(frames, {m['name']: m['display'] for m in model_specs}, method, panel_path)
+
     metadata = {'protocol': PROTOCOL, 'status': 'COMPLETE', 'projection_method': method,
                 'parameters': dict(params, n_components=2), 'selection': sample.audit,
                 'selection_sha256': selection_sha, 'sample_file': _file_record(sample_path),
-                'panel_file': _file_record(panel_path), 'genus_colors': colors,
+                'panel_file': _file_record(panel_path),
+                'selective_panel_file': _file_record(selective_panel_path),
+                'selected_genera_file': _file_record(selected_genera_path),
+                'sampled_query_ids_file': _file_record(sampled_queries_path),
+                'genus_colors': colors,
                 'projections': outputs, 'embedding_inputs': embedding_inputs or {},
                 'environment': environment, 'is_qualitative_only': True,
                 'interpretation': 'Independent fits/axes; sample is not the full taxonomy; no quantitative or phylogenetic inference.'}

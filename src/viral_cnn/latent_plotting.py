@@ -139,6 +139,60 @@ def render_comparison(comparison: dict, output_dir: Path | str) -> dict:
     table = pd.DataFrame({'Genus': genera, 'color': [colors[g] for g in genera],
                           'selected_count': [int(counts[g]) for g in genera]})
     _atomic(output / 'umap_genus_colors.csv', lambda p: table.to_csv(p, index=False))
+
+    # Highlighted genera & selective panel
+    sorted_genera = sorted(genera, key=lambda g: (-int(counts[g]), str(g)))
+    max_highlight = min(10, len(sorted_genera))
+    highlighted_set = set(sorted_genera[:max_highlight])
+
+    selected_genera_df = pd.DataFrame([
+        {
+            'Genus': g,
+            'color': colors.get(g, '#d0d0d0'),
+            'sample_count': int(counts[g]),
+            'selection_rank': i + 1,
+            'is_highlighted': g in highlighted_set,
+        }
+        for i, g in enumerate(sorted_genera)
+    ])
+    _atomic(output / 'selected_genera.csv', lambda p: selected_genera_df.to_csv(p, index=False))
+
+    sampled_queries_df = pd.DataFrame({
+        'query_id': base['row_id'].to_numpy(dtype=str),
+        'label': base['label'].to_numpy(dtype=int),
+        'Genus': base['Genus'].to_numpy(dtype=str),
+        'is_highlighted': base['Genus'].isin(highlighted_set).to_numpy(dtype=bool),
+    })
+    _atomic(output / 'sampled_query_ids.csv', lambda p: sampled_queries_df.to_csv(p, index=False))
+
+    fig_sel, axes_sel = plt.subplots(1, 5, figsize=(22, 5))
+    try:
+        sorted_highlighted = sorted(highlighted_set)
+        for ax, name in zip(axes_sel, MODEL_NAMES):
+            frame = frames[name]
+            bg = frame[~frame['Genus'].isin(highlighted_set)]
+            if not bg.empty:
+                ax.scatter(bg['umap_1'], bg['umap_2'], color='#d0d0d0', s=10, alpha=0.35, label='_nolegend_')
+            for genus in sorted_highlighted:
+                subset = frame[frame['Genus'] == genus]
+                if not subset.empty:
+                    ax.scatter(subset['umap_1'], subset['umap_2'], color=colors[genus], s=20, alpha=0.85)
+            ax.set_title(f"{DISPLAY_NAMES[name]}\n{method} (selective) · N={len(frame)}")
+            ax.set_xlabel(f"{method} 1")
+            ax.set_ylabel(f"{method} 2")
+            ax.set_aspect('equal', adjustable='box')
+            ax.margins(0.05)
+            ax.spines[['top', 'right']].set_visible(False)
+        handles = [Patch(color=colors[g], label=g) for g in sorted_highlighted]
+        if any((~frames[m]['Genus'].isin(highlighted_set)).any() for m in MODEL_NAMES):
+            handles.append(Patch(color='#d0d0d0', label='Outros gêneros (fundo)'))
+        fig_sel.legend(handles=handles, loc='lower center', ncol=min(6, len(handles)), title='Gêneros selecionados')
+        fig_sel.suptitle(f"{method} — amostra pareada; gêneros em destaque sobre fundo neutro (qualitativo)")
+        fig_sel.subplots_adjust(bottom=0.26, top=0.78, wspace=0.35)
+        _atomic(output / 'umap_selective_panel.png', lambda p: fig_sel.savefig(p, format='png', dpi=160))
+    finally:
+        plt.close(fig_sel)
+
     payload = {'method': method, 'genera': genera, 'colors': [colors[g] for g in genera],
                'counts': table.selected_count.tolist(), 'ids': base.row_id.tolist(),
                'labels': base.label.tolist(), 'genus': pd.Categorical(base.Genus, categories=genera).codes.tolist(),
@@ -162,3 +216,101 @@ def render_comparison(comparison: dict, output_dir: Path | str) -> dict:
                                    'colors_file': _record(output / 'umap_genus_colors.csv')}})
     _atomic(output / 'umap_comparison.json', lambda p: p.write_text(json.dumps(metadata, indent=2) + '\n'))
     return metadata['rendering']
+
+
+def render_quantitative_summary(
+    table5_records: list[dict[str, Any]],
+    probe_records: list[dict[str, Any]] | None,
+    output_dir: Path | str,
+) -> tuple[Path, Path]:
+    """Render high-dimensional original space metrics (KNN, Silhouette, Probe) to CSV and PNG."""
+    import matplotlib.pyplot as plt
+
+    output = Path(output_dir).resolve()
+    csv_path = output / 'latent_quantitative_summary.csv'
+    png_path = output / 'latent_quantitative_summary.png'
+
+    t5_df = pd.DataFrame(table5_records) if isinstance(table5_records, list) else pd.DataFrame(table5_records)
+    probe_df = pd.DataFrame(probe_records) if probe_records else pd.DataFrame()
+
+    combined_rows = []
+    model_col = 'Model' if 'Model' in t5_df.columns else ('model' if 'model' in t5_df.columns else None)
+    models = t5_df[model_col].unique() if model_col else list(DISPLAY_NAMES.values())
+
+    for m in models:
+        row = {'Model': m}
+        sub = t5_df[t5_df[model_col] == m] if model_col else pd.DataFrame()
+        if 'Rank' in sub.columns or 'rank' in sub.columns:
+            rcol = 'Rank' if 'Rank' in sub.columns else 'rank'
+            sp_sub = sub[sub[rcol].astype(str).str.lower() == 'species']
+            if not sp_sub.empty:
+                acc_cols = [c for c in sp_sub.columns if 'knn' in c.lower() or 'accuracy' in c.lower()]
+                if acc_cols:
+                    row['KNN_Species_Acc'] = float(sp_sub[acc_cols[0]].iloc[0])
+                sil_cols = [c for c in sp_sub.columns if 'silhouette' in c.lower()]
+                if sil_cols:
+                    row['Silhouette_Species'] = float(sp_sub[sil_cols[0]].iloc[0])
+            gen_sub = sub[sub[rcol].astype(str).str.lower() == 'genus']
+            if not gen_sub.empty:
+                acc_cols = [c for c in gen_sub.columns if 'knn' in c.lower() or 'accuracy' in c.lower()]
+                if acc_cols:
+                    row['KNN_Genus_Acc'] = float(gen_sub[acc_cols[0]].iloc[0])
+        elif not sub.empty:
+            for c in sub.columns:
+                if c != model_col:
+                    row[c] = sub[c].iloc[0]
+
+        if not probe_df.empty:
+            p_mcol = 'Model' if 'Model' in probe_df.columns else ('model' if 'model' in probe_df.columns else None)
+            if p_mcol:
+                p_sub = probe_df[probe_df[p_mcol] == m]
+                if not p_sub.empty:
+                    if 'Linear_Probe_Test_Acc' in p_sub.columns:
+                        row['Linear_Probe_Acc'] = float(p_sub['Linear_Probe_Test_Acc'].iloc[0])
+                    if 'Native_Head_Accuracy' in p_sub.columns:
+                        row['Native_Head_Acc'] = float(p_sub['Native_Head_Accuracy'].iloc[0])
+        combined_rows.append(row)
+
+    summary_df = pd.DataFrame(combined_rows)
+    _atomic(csv_path, lambda p: summary_df.to_csv(p, index=False))
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    try:
+        ax1 = axes[0]
+        knn_cols = [c for c in summary_df.columns if 'knn' in c.lower()]
+        if knn_cols:
+            summary_df.plot(x='Model', y=knn_cols, kind='bar', ax=ax1, rot=25)
+            ax1.set_title('KNN Cosseno (k=5) no Espaço Original')
+            ax1.set_ylabel('Acurácia')
+            ax1.grid(True, linestyle='--', alpha=0.5)
+        else:
+            ax1.text(0.5, 0.5, 'Dados de KNN não disponíveis', ha='center', va='center')
+
+        ax2 = axes[1]
+        sil_cols = [c for c in summary_df.columns if 'silhouette' in c.lower()]
+        if sil_cols:
+            summary_df.plot(x='Model', y=sil_cols, kind='bar', ax=ax2, rot=25, color='teal')
+            ax2.set_title('Silhouette Score no Espaço Original')
+            ax2.set_ylabel('Score [-1, 1]')
+            ax2.grid(True, linestyle='--', alpha=0.5)
+        else:
+            ax2.text(0.5, 0.5, 'Dados de Silhouette não disponíveis', ha='center', va='center')
+
+        ax3 = axes[2]
+        probe_cols = [c for c in summary_df.columns if 'probe' in c.lower() or 'native' in c.lower()]
+        if probe_cols:
+            summary_df.plot(x='Model', y=probe_cols, kind='bar', ax=ax3, rot=25, color=['coral', 'steelblue'][:len(probe_cols)])
+            ax3.set_title('Sonda Linear vs Classificador Nativo')
+            ax3.set_ylabel('Acurácia em Test')
+            ax3.grid(True, linestyle='--', alpha=0.5)
+        else:
+            ax3.text(0.5, 0.5, 'Dados de Sonda não disponíveis', ha='center', va='center')
+
+        fig.suptitle('Métricas Quantitativas do Espaço Latente Original (Pré-Classificador)', fontsize=14, y=0.98)
+        fig.tight_layout()
+        _atomic(png_path, lambda p: fig.savefig(p, format='png', dpi=160))
+    finally:
+        plt.close(fig)
+
+    return csv_path, png_path
+

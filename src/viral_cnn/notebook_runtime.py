@@ -337,13 +337,39 @@ def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
 
 def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_test: bool = False) -> Dict[str, Any]:
     """Inspect declared notebook prerequisites using only filesystem metadata."""
-    if notebook_id not in NOTEBOOK_REQUIREMENTS:
+    if notebook_id not in NOTEBOOK_REQUIREMENTS and notebook_id != "short/06b":
         raise ValueError(f"Unknown notebook_id {notebook_id!r}; choose one of {sorted(NOTEBOOK_REQUIREMENTS)}")
     if notebook_id == "short/09" and not smoke_test:
         from viral_cnn.baselines.overlap import inspect_c03_package, resolve_c03_directory
         topology = JupyterHubDataTopology(data_root)
         source = os.getenv("C03_PREPARED_DIR", str(topology.paths["short"]["kraken_blast_dir"]))
         return {"notebook_id": notebook_id, "is_smoke_test": False, **inspect_c03_package(resolve_c03_directory(source, data_root))}
+    if notebook_id == "short/06b":
+        source_str = os.getenv("LATENT_SOURCE_DIR")
+        source = Path(source_str).resolve() if source_str else None
+        ok = False
+        detail = "missing LATENT_SOURCE_DIR"
+        if source and source.is_dir():
+            has_umap = (source / "umap_comparison.json").is_file()
+            has_manifest = (source / "manifest.json").is_file()
+            has_embeddings = bool(list(source.glob("*.pt")))
+            if has_umap or (has_manifest and has_embeddings):
+                ok = True
+                detail = f"valid latent source at {source}"
+            else:
+                detail = f"latent source {source} missing umap_comparison.json or embeddings"
+        elif source:
+            detail = f"latent source does not exist: {source}"
+        elif smoke_test:
+            ok = True
+            detail = "smoke test mode for short/06b"
+        return {
+            "notebook_id": notebook_id,
+            "status": "READY" if ok else "BLOCKED",
+            "is_smoke_test": smoke_test,
+            "scientific_reproduction_certified": False,
+            "requirements": [{"requirement": "latent_source_dir", "path": str(source) if source else "", "status": "READY" if ok else "BLOCKED", "detail": detail, "external": True}],
+        }
     topology = JupyterHubDataTopology(data_root)
     results = []
     for spec in NOTEBOOK_REQUIREMENTS[notebook_id]:

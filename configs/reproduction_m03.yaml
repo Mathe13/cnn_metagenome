@@ -1,0 +1,12 @@
+# Configuração da etapa M03: Espaço Latente e Visualizações Úteis (short/06, short/06b)
+protocol_id: "m03_latent_audit_v1"
+seed: 42
+latent_execution_mode: "reuse"  # reuse ou rerun
+latent_umap_max_samples: 100
+latent_umap_max_genera: 10
+latent_knn_workspace_mb: 1024
+latent_knn_query_batch_size: 4096
+latent_eval_batch_size: 1024
+is_smoke_test: false
+scientific_reproduction_certified: false
+qualitative_disclaimer: "QUALITATIVE ONLY: independently fitted 2D projections; axes are not aligned. Do not infer quantitative cluster separation or phylogenetic distance."
