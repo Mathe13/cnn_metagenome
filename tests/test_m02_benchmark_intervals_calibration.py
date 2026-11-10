@@ -12,6 +12,9 @@ from unittest.mock import patch
 os.environ['REMOTE_SERVER'] = 'False'
 import numpy as np
 import pandas as pd
+import torch
+import matplotlib.pyplot as plt
+torch.set_num_threads(1)
 from viral_cnn.baselines.preparation import prepare_queries, bind_query_manifests, write_method_condition_manifest
 from viral_cnn.baselines.overlap import inspect_c03_package, load_prepared_baseline_benchmark
 
@@ -79,6 +82,8 @@ class M02Tests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
+        cpu=patch('torch.cuda.is_available',return_value=False)
+        cpu.start();self.addCleanup(cpu.stop)
         env=patch.dict(os.environ,{'REMOTE_SERVER':'False','LOG_PATH':'0'},clear=True)
         env.start();self.addCleanup(env.stop)
 

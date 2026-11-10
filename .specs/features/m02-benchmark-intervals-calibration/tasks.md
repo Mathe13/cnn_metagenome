@@ -338,7 +338,9 @@ T3 também depende de T2 e T5 de T4 pelo encadeamento estrito entre fases. As tr
 
 **Settled mid-build:** Spec aprovada: user: "prossiga", 2026-11-09. Design A e tarefas aprovados: user: "aprovado", 2026-11-09.
 **Dispatched:** none. Após último commit: registrar HEAD, disparar Verifier independente e atualizar retorno antes de qualquer novo dispatch.
-**Walked:** ainda não executado. Walk de pesquisa é execução local de células/fixtures e inspeção das tabelas/figuras, sem UI web.
-**Next:** executar T1 após gate --execute.
+**Walked:** 01/02 executados com backbone mínimo; 09 consumiu pacote de 35 condições com torch.load/build bloqueados e executou smoke de 40 queries. CSVs, PNG/PDF, hashes, abstenção e falhas inspecionados pelas 37 provas locais. Sem UI web ou execução remota.
+**Next:** provas finais e revisão independente após oito tarefas.
 **Limits:** sem preflight remoto, checkpoints canônicos ou número do artigo reproduzido. Parquets afetados no incidente M01 permanecem inadmissíveis.
 
+
+**Final proof incident:** Em d2ab242, suite completa PASS 37/37 (86,364 s), mas o coletor não reconheceu C10/C20 porque avisos CUDA/Matplotlib quebraram linhas do unittest. Correção de isolamento: GPU sempre indisponível por patch nos testes M02 e import Matplotlib antes dos casos, sem mudar asserções.
