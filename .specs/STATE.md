@@ -43,9 +43,9 @@
 
 ## Handoff
 **Feature**: m06-long-sequences-strata-analysis
-**Where**: M00–M06 concluídos com suíte de 168 testes íntegra e verde.
-**In progress**: Conclusão da fase M06 e preparação para verificação independente.
-**Next step**: Submeter ao Verifier independente (tlc-spec-lean verify).
+**Where**: M00–M06 concluídos; relatório de verificação independente registrado com PASS (17/17 checks, gate 0 errors / 0 warnings).
+**In progress**: Conclusão da fase M06 e preparação para M07 ("Treinamento controlado e fine-tuning com ruído", `c05/short/03–04`).
+**Next step**: Iniciar M07 conforme o roadmap `ROADMAP_MELHORIAS_REPRODUCTION_2026-11-09.md`.
 **Blockers**: Checkpoints e Parquets reais continuam no cluster remoto; ambiente de desenvolvimento opera localmente sobre fixtures sintéticas deterministicamente verificadas (`REMOTE_SERVER=False`, `SMOKE_TEST=1`).
-**Uncommitted**: Implementação de M06 em `src/viral_cnn/m06_workflow.py`, `tests/test_m06_long_sequences_strata.py`, `configs/reproduction_m06.yaml`, `notebooks/reproduction/long/{03,04}_*.ipynb`.
+**Uncommitted**: `.specs/features/m06-long-sequences-strata-analysis/verification.md`, `.specs/STATE.md`.
 **Branch**: main
