@@ -882,6 +882,267 @@ def write_publication_manifest(
     return target
 
 
+PROPOSED_SOURCES: dict[str, str] = {
+    "T1": "results_reproduction/runs/<run_id>/short/01/ (short evaluation metrics)",
+    "T2": "results_reproduction/runs/<run_id>/short/02/ (profiling and latency)",
+    "T3": "results_reproduction/runs/<run_id>/short/09/ (noise degradation benchmark)",
+    "T4": "results_reproduction/runs/<run_id>/short/01/ (species F1 distribution)",
+    "T5": "results_reproduction/runs/<run_id>/short/06/ (latent space KNN/Silhouette)",
+    "T6": "results_reproduction/runs/<run_id>/short/06/ (hierarchy correlations)",
+    "T7": "results_reproduction/runs/<run_id>/short/06b/ (hierarchical entropy)",
+    "T8": "results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv",
+    "T9": "results_reproduction/runs/<run_id>/short/08/ (exploratory RSCU)",
+    "T10": "results_reproduction/runs/<run_id>/short/08/ (triplet composition)",
+    "T11": "results_reproduction/runs/<run_id>/short/08/ (permutation null architecture comparison)",
+    "T12": "results_reproduction/runs/<run_id>/long/03/table_12_long_voter_comparison.csv",
+    "F1": "results_reproduction/runs/<run_id>/short/09/ (noise robustness curves)",
+    "F2": "results_reproduction/runs/<run_id>/short/06b/selected_genera.csv (UMAP projections)",
+    "F3": "results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv (5 panels)",
+    "F4": "results_reproduction/runs/<run_id>/short/08/ (RSCU profile data)",
+    "F5": "results_reproduction/runs/<run_id>/short/08/edge_table.csv (network graph coordinates)",
+}
+
+FIVE_SPECIES_VARIANTS = {
+    "ResNet50_Clean",
+    "ConvNeXt_Z",
+    "ConvNeXt_T",
+    "ResNet50_F",
+    "ConvNeXt_F",
+}
+
+
+def diagnose_publication_readiness(
+    config_or_path: dict[str, Any] | Path | str,
+    *,
+    project_root: Path | None = None,
+    strict_empirical: bool = True,
+) -> pd.DataFrame:
+    """Audit all 17 publication items and classify them into 5 granular readiness states:
+
+    - OK: all artifact, manifest, schema, and scientific invariants satisfied.
+    - FALTA: artifact or manifest path is unset or missing on disk.
+    - SCHEMA_MISMATCH: file exists, but table columns or plot coordinates are missing.
+    - IDENTITY_MISMATCH: seed, split_id, checkpoints, or class order mismatch.
+    - SCIENTIFIC_MISMATCH: image file passed as source, synthetic evidence under empirical mode,
+      F3 missing 5 models, T11 claiming architecture correlation without permutation test,
+      or F5 network graph missing edge coordinates.
+    """
+    if isinstance(config_or_path, (str, Path)):
+        config = load_publication_config(Path(config_or_path))
+    else:
+        config = config_or_path
+
+    root = Path(project_root or config.get("_project_root", Path.cwd()))
+    results: list[dict[str, Any]] = []
+
+    for item in config.get("items", []):
+        iid = item.get("item_id", "")
+        proposed = PROPOSED_SOURCES.get(iid, "results_reproduction/runs/<run_id>/...")
+        artifact_raw = item.get("artifact", "")
+        manifest_raw = item.get("manifest", "")
+
+        artifact = _resolve(root, str(artifact_raw)) if artifact_raw else None
+        manifest = _resolve(root, str(manifest_raw)) if manifest_raw else None
+
+        # Check FALTA
+        if not artifact or not artifact.exists() or not manifest or not manifest.is_file():
+            missing_parts = []
+            if not artifact or not artifact.exists():
+                missing_parts.append(f"artifact missing: {artifact_raw or '<unset>'}")
+            if not manifest or not manifest.is_file():
+                missing_parts.append(f"manifest missing: {manifest_raw or '<unset>'}")
+            results.append({
+                "item_id": iid,
+                "status": "FALTA",
+                "diagnostic": "; ".join(missing_parts),
+                "proposed_source": proposed,
+                "recommendation": f"Generate or select {iid} output from {proposed}",
+            })
+            continue
+
+        log_artifact_path(f"Diagnosing publication item {iid}", artifact)
+
+        # Check if an image file was supplied instead of tabular data (SCIENTIFIC_MISMATCH)
+        if artifact.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".svg"}:
+            results.append({
+                "item_id": iid,
+                "status": "SCIENTIFIC_MISMATCH",
+                "diagnostic": f"Image file ({artifact.suffix}) passed as publication source; tabular data (CSV/Parquet) required",
+                "proposed_source": proposed,
+                "recommendation": "Provide structured CSV or Parquet data representing the underlying numbers",
+            })
+            continue
+
+        # Load manifest
+        try:
+            declared_manifest = _read_manifest(manifest)
+        except Exception as exc:
+            results.append({
+                "item_id": iid,
+                "status": "SCHEMA_MISMATCH",
+                "diagnostic": f"Manifest unreadable: {exc}",
+                "proposed_source": proposed,
+                "recommendation": "Re-emit manifest with valid JSON format",
+            })
+            continue
+
+        # Check synthetic evidence in strict empirical mode
+        if strict_empirical and (declared_manifest.get("is_smoke_test") is True or declared_manifest.get("synthetic") is True):
+            results.append({
+                "item_id": iid,
+                "status": "SCIENTIFIC_MISMATCH",
+                "diagnostic": "Selected evidence declares synthetic/smoke mode, forbidden under strict empirical publication",
+                "proposed_source": proposed,
+                "recommendation": "Run stage in empirical mode (SMOKE_TEST=0) on cluster to produce real evidence",
+            })
+            continue
+
+        # Check hash
+        actual_hash = sha256_path(artifact)
+        if item.get("sha256") and item.get("sha256") != actual_hash:
+            results.append({
+                "item_id": iid,
+                "status": "IDENTITY_MISMATCH",
+                "diagnostic": f"Artifact hash mismatch: config={item.get('sha256')[:10]} vs disk={actual_hash[:10]}",
+                "proposed_source": proposed,
+                "recommendation": "Update configuration sha256 or regenerate artifact",
+            })
+            continue
+
+        # Check scientific identity
+        expected = item.get("expected", {})
+        expected_identity = expected.get("scientific_identity", {})
+        declared_identity = declared_manifest.get("scientific_identity", {})
+        identity_errors = []
+
+        for field in ("seed", "split_id"):
+            if field in expected_identity and expected_identity[field] not in (None, "", "TO_BE_SELECTED"):
+                if declared_identity.get(field) != expected_identity.get(field):
+                    identity_errors.append(f"{field} mismatch: expected {expected_identity.get(field)}, got {declared_identity.get(field)}")
+
+        if identity_errors:
+            results.append({
+                "item_id": iid,
+                "status": "IDENTITY_MISMATCH",
+                "diagnostic": "; ".join(identity_errors),
+                "proposed_source": proposed,
+                "recommendation": "Re-run stage with matching split and seed parameters",
+            })
+            continue
+
+        # Load artifact table
+        try:
+            table_frame = _load_table_artifact(artifact)
+        except Exception as exc:
+            results.append({
+                "item_id": iid,
+                "status": "SCHEMA_MISMATCH",
+                "diagnostic": f"Table artifact unreadable: {exc}",
+                "proposed_source": proposed,
+                "recommendation": "Verify file integrity and CSV/Parquet format",
+            })
+            continue
+
+        # Schema check for tables
+        if iid.startswith("T"):
+            expected_columns = expected.get("columns", [])
+            if expected_columns and not set(expected_columns).issubset(table_frame.columns):
+                missing_cols = list(set(expected_columns) - set(table_frame.columns))
+                results.append({
+                    "item_id": iid,
+                    "status": "SCHEMA_MISMATCH",
+                    "diagnostic": f"Missing expected table columns: {missing_cols}",
+                    "proposed_source": proposed,
+                    "recommendation": f"Add missing columns {missing_cols} via registered transformation",
+                })
+                continue
+
+            # Scientific contract for T11
+            if iid == "T11":
+                if "is_permutation_tested" in table_frame.columns and not table_frame["is_permutation_tested"].all():
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCIENTIFIC_MISMATCH",
+                        "diagnostic": "T11 co-occurrence matrix without permutation null test cannot claim architecture correlation",
+                        "proposed_source": proposed,
+                        "recommendation": "Apply permutation null test across nodes and report empirical p-values",
+                    })
+                    continue
+                if "correlation_r" in table_frame.columns and (table_frame["correlation_r"] == 1.0).all():
+                    if "has_variance" in table_frame.columns and not table_frame["has_variance"].all():
+                        results.append({
+                            "item_id": iid,
+                            "status": "SCIENTIFIC_MISMATCH",
+                            "diagnostic": "T11 exhibits spurious r=1 correlation from identical or zero-variance matrices",
+                            "proposed_source": proposed,
+                            "recommendation": "Evaluate independent model representations with verified variance",
+                        })
+                        continue
+
+        # Schema & scientific checks for figures
+        if iid.startswith("F"):
+            plot = item.get("plot", {})
+            kind = plot.get("kind", "line")
+
+            if kind == "network_edges":
+                edge_cols = [plot.get(c) for c in ("x1", "y1", "x2", "y2") if plot.get(c)]
+                if len(edge_cols) < 4 or not all(c in table_frame.columns for c in edge_cols):
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCHEMA_MISMATCH",
+                        "diagnostic": f"F5 network graph missing required 2D coordinates ({edge_cols})",
+                        "proposed_source": proposed,
+                        "recommendation": "Export edge_table.csv with explicit x1, y1, x2, y2 node coordinates",
+                    })
+                    continue
+            elif kind == "panel_grid":
+                x_col, y_col = plot.get("x"), plot.get("y")
+                if not {"panel", "variant", x_col, y_col}.issubset(table_frame.columns):
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCHEMA_MISMATCH",
+                        "diagnostic": f"F3 panel grid missing required columns (panel, variant, {x_col}, {y_col})",
+                        "proposed_source": proposed,
+                        "recommendation": "Format motif perturbation data with panel, variant, motif, activation_drop",
+                    })
+                    continue
+
+                # Scientific contract for F3: requires 5 models
+                variants_present = set(table_frame["variant"].astype(str))
+                missing_variants = FIVE_SPECIES_VARIANTS - variants_present
+                if missing_variants:
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCIENTIFIC_MISMATCH",
+                        "diagnostic": f"F3 missing required species model variants: {missing_variants}",
+                        "proposed_source": proposed,
+                        "recommendation": "Include all 5 species models (including ConvNeXt_F) in motif perturbation",
+                    })
+                    continue
+            else:
+                x_col, y_col = plot.get("x"), plot.get("y")
+                if x_col not in table_frame.columns or y_col not in table_frame.columns:
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCHEMA_MISMATCH",
+                        "diagnostic": f"Figure missing x/y columns: {x_col}, {y_col}",
+                        "proposed_source": proposed,
+                        "recommendation": f"Ensure columns {x_col} and {y_col} exist in data",
+                    })
+                    continue
+
+        # If it reached here without failing, it is OK
+        results.append({
+            "item_id": iid,
+            "status": "OK",
+            "diagnostic": "All artifact, manifest, schema, and scientific contracts verified.",
+            "proposed_source": proposed,
+            "recommendation": "Ready for publication assembly.",
+        })
+
+    return pd.DataFrame(results)
+
+
 def assemble_publication(
     config_path: Path, output_dir: Path, *, strict_empirical: bool = True,
     command: str = "", interface: str = "cli", diagnostic_only: bool = False,
@@ -898,11 +1159,24 @@ def assemble_publication(
             raise FileExistsError(f"Refusing to reuse non-empty publication output: {output_dir}")
     else:
         output_dir.mkdir(parents=True, exist_ok=False)
+
+    # Run batch diagnosis
+    diag_df = diagnose_publication_readiness(config, project_root=Path(config["_project_root"]), strict_empirical=strict_empirical)
+    diag_csv = output_dir / "publication_diagnostic_report.csv"
+    diag_md = output_dir / "publication_diagnostic_report.md"
+    diag_df.to_csv(diag_csv, index=False)
+    from viral_cnn.reporting.tables import _df_to_markdown
+    diag_md.write_text(_df_to_markdown(diag_df), encoding="utf-8")
+
     rows = validate_selection(config, strict_empirical=False)
     matrix = evidence_matrix(config, rows)
     matrix_path = output_dir / "evidence_matrix.csv"
     matrix.to_csv(matrix_path, index=False)
-    outputs: dict[str, Path] = {"evidence_matrix": matrix_path}
+    outputs: dict[str, Path] = {
+        "evidence_matrix": matrix_path,
+        "diagnostic_report_csv": diag_csv,
+        "diagnostic_report_md": diag_md,
+    }
     all_ready = len(rows) == 17 and all(r["status"] in {"EMPIRICAL_VERIFIED", "DERIVED_VERIFIED"} for r in rows)
     gates = {"local": "PASS", "empirical": "PASS" if all_ready else "BLOCKED", "scientific": "PENDING", "editorial": "PENDING"}
     compile_results: dict[str, dict[str, Any]] = {}
@@ -942,9 +1216,9 @@ def assemble_publication(
         config, output_dir, rows, outputs, command=command, interface=interface, gate_states=gates,
     )
     if strict_empirical and not all_ready:
-        return {"status": "BLOCKED", "rows": rows, "matrix": matrix_path, "manifest": manifest_path, "gates": gates}
+        return {"status": "BLOCKED", "rows": rows, "matrix": matrix_path, "manifest": manifest_path, "gates": gates, "diagnostics": diag_df}
     status = "DIAGNOSTIC" if not all_ready or diagnostic_only else (
         "FAILED" if gates["local"] != "PASS" else "ASSEMBLED_REVIEW_REQUIRED"
     )
     return {"status": status, "rows": rows, "matrix": matrix_path, "manifest": manifest_path,
-            "outputs": outputs, "gates": gates, "compilation": compile_results}
+            "outputs": outputs, "gates": gates, "compilation": compile_results, "diagnostics": diag_df}

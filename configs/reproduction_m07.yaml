@@ -1,0 +1,228 @@
+publication_protocol: c06_strict_v1
+schema_version: 1
+run_id: m07-publication
+protocol_id: m07_publication_contracts_v1
+
+historical_source:
+  manuscript_review: paper/manuscript_review.tex
+  manuscript_submission: paper/manuscript_submission.tex
+  paper_directory_snapshot: paper
+
+identity_template: &unselected_scientific_identity
+  dataset_sha256: ""
+  population_id: ""
+  split_id: ""
+  seed: ""
+  taxonomy_version: ""
+  class_order_sha256: ""
+  checkpoint_sha256s: ""
+  model_variants: ""
+  noise_conditions: ""
+  metric_definition: ""
+
+items:
+  - item_id: T1
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_1_metrics
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [model, taxonomic_level, backbone_m, fc_params_m, parameters_m, accuracy, top_5, macro_f1, latency_ms]
+    output: table_1.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/01/
+
+  - item_id: T2
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_2_profiling
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [model, backbone_m, fc_params_m, parameters_m, peak_vram_mb, step_time_ms, throughput_seq_s, gpu_hours]
+    output: table_2.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/02/
+
+  - item_id: T3
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_3_noise_degradation
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [epsilon]
+    output: table_3.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/09/
+
+  - item_id: T4
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_4_species_f1_and_pairwise
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [f1_bin]
+    output: table_4.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/01/
+
+  - item_id: T5
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_5_latent_metrics
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [model, knn_accuracy]
+    output: table_5.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/06/
+
+  - item_id: T6
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_6_hierarchy_correlations
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [level_pair]
+    output: table_6.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/06/
+
+  - item_id: T7
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_7_hierarchical_entropy
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [model]
+    output: table_7.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/06b/
+
+  - item_id: T8
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_8_paired_motif_perturbation
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [motif]
+    output: table_8.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv
+
+  - item_id: T9
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_9_rscu_exploratory
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [triplet]
+    output: table_9.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/08/
+
+  - item_id: T10
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_10_triplet_composition
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [triplet]
+    output: table_10.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/08/
+
+  - item_id: T11
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_table_11_architecture_correlations
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: []
+    output: table_11.csv
+    proposed_source: results_reproduction/runs/<run_id>/short/08/
+
+  - item_id: T12
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: c02_audit_v1
+    transformation: transform_table_12_long_sequence_consensus
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      columns: [model, majority_vote_acc, mean_logits_acc]
+    output: table_12.csv
+    proposed_source: results_reproduction/runs/<run_id>/long/03/table_12_long_voter_comparison.csv
+
+  - item_id: F1
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_figure_1_noise_robustness
+    expected:
+      scientific_identity: *unselected_scientific_identity
+    output: fig_1.png
+    plot: {x: epsilon, y: accuracy, title: "Noise robustness"}
+    proposed_source: results_reproduction/runs/<run_id>/short/09/
+
+  - item_id: F2
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_figure_2_umap_visualization
+    expected:
+      scientific_identity: *unselected_scientific_identity
+    output: fig_2.png
+    plot: {kind: scatter, x: umap_1, y: umap_2, color_by: rank, title: "UMAP visualization", interpretation: "qualitative visualization only"}
+    proposed_source: results_reproduction/runs/<run_id>/short/06b/selected_genera.csv
+
+  - item_id: F3
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_figure_3_paired_motif_perturbation
+    expected:
+      scientific_identity: *unselected_scientific_identity
+      panels: [a, b, c, d, e]
+      panel_variants: {a: ResNet50_Clean, b: ConvNeXt_Z, c: ConvNeXt_T, d: ResNet50_F, e: ConvNeXt_F}
+    output: fig_3.png
+    plot: {kind: panel_grid, x: motif, y: activation_drop, title: "Paired motif perturbation"}
+    proposed_source: results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv
+
+  - item_id: F4
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_figure_4_rscu_profile
+    expected:
+      scientific_identity: *unselected_scientific_identity
+    output: fig_4.png
+    plot: {kind: scatter, x: triplet, y: rscu, title: "Triplet composition and RSCU", interpretation: "exploratory triplet composition"}
+    proposed_source: results_reproduction/runs/<run_id>/short/08/
+
+  - item_id: F5
+    artifact: ""
+    manifest: ""
+    sha256: ""
+    protocol: ""
+    transformation: transform_figure_5_motif_cooccurrence
+    expected:
+      scientific_identity: *unselected_scientific_identity
+    output: fig_5.png
+    plot: {kind: network_edges, x1: x1, y1: y1, x2: x2, y2: y2, title: "Motif co-occurrence"}
+    proposed_source: results_reproduction/runs/<run_id>/short/08/edge_table.csv
