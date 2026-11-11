@@ -37,12 +37,13 @@
 | AD-029 | M01 identifica 10/11/05 por run exclusivo e manifesto COMPLETE/FAILED; `m01_fragment_split_audit_v1` usa N integral de test e união direto/RC; auditoria de referência (`m01_existing_taxonomy_audit_v1`) é distinta de curadoria MSL (`m01_ictv_curate_v1`). Ranks não resolvidos e labels divergentes não são reparados silenciosamente; `hierarchy_ready=false` bloqueia publicação de nova taxonomia para consumidores 02/06. | Preserva fontes e população histórica, aplica reservas M00 e impede fallback sintético em modo empírico. Auditoria taxonômica não identifica genomas; hashes limitados de fragmentos são explicitamente incompletos. | active | 2026-11-09 |
 | AD-030 | M02 consome o pacote C03 auditado com 35 condições no notebook 09, calcula ICs por bootstrap pareado com 2.000 réplicas por estrato/ruído, restringe GradCAM a amostras determinísticas registradas e sela calibração na validação sem alteração pós-hoc em teste | Elimina injeção hardcoded em 09; assegura paridade total de queries e rótulos entre CNN e baselines Kraken2/BLASTN com suporte fixo por espécie; demarca que incerteza é condicional à amostra de fragmentos observada. | active | 2026-11-10 |
 | AD-031 | M03 adota ciclo de vida M00 em 06 e 06b sob protocolo `m03_latent_audit_v1`, adiciona painel UMAP seletivo pareado com destaque contrastante e fundo neutro, e sintetiza métricas em alta dimensão no espaço original pré-classificador com demarcação qualitativa de eixos 2D | Impede caminhos hardcoded `/home/mlima/...`; assegura que os cinco modelos compartilhem exatamente os mesmos fragmentos pareados C10; isola métricas quantitativas auditadas de proximidade filogenética ou separabilidade global. | active | 2026-11-10 |
+| AD-032 | M04 isola o ciclo de vida do notebook 07 sob protocolo `m04_motifs_audit_v1`, exige preflight dos cinco modelos de espécie, reconcilia o esquema da Tabela 8 com C06 e gera a Figura 3 científica principal com cinco painéis (a–e) com autenticidade estrita de ConvNeXt_F | Elimina caminhos estáticos legados; assegura pareamento estrito de controle uniforme e GC na mesma sequência (|ΔGC|=0) sem viés composicional; demarca que 7-mers atuam como detectores locais de bases sem função biológica de fatores de transcrição ou códons. | active | 2026-11-10 |
 
 ## Handoff
-**Feature**: m04-motifs-and-first-layer-perturbation
-**Where**: Planejamento do ciclo M04 iniciado; M00, M01, M02 e M03 concluídos e verificados com 150 testes passando em conformidade com o roadmap.
-**In progress**: Elaboração de `plan.md` em `m04-motifs-and-first-layer-perturbation`.
-**Next step**: Apresentar `plan.md` aprovado por `validate_plan.py` ao usuário para revisão humana e confirmação antes de derivar `checks.md`.
-**Blockers**: Checkpoints e Parquets reais continuam no armazenamento do cluster; testes locais continuam estritamente determinísticos sobre fixtures sintéticas via `REMOTE_SERVER=False` e `SMOKE_TEST=1`.
-**Uncommitted**: `.specs/STATE.md` e novo diretório de especificação M04.
+**Feature**: m05-triplet-composition-and-cooccurrence
+**Where**: M00, M01, M02, M03 e M04 concluídos, verificados por subagentes independentes com todos os gates passando.
+**In progress**: Transição para o planejamento da fase M05 (notebook `short/08_triplet_composition_and_cooccurrence.ipynb`, T11 e F5).
+**Next step**: Estruturar plano e decisões de T11/F5 para M05 em `plan.md`.
+**Blockers**: Checkpoints e Parquets reais continuam no cluster remoto; ambiente de desenvolvimento opera localmente sobre fixtures sintéticas deterministicamente verificadas (`REMOTE_SERVER=False`, `SMOKE_TEST=1`).
+**Uncommitted**: Relatório `verification.md` de M04 e atualização de `.specs/STATE.md`.
 **Branch**: main
