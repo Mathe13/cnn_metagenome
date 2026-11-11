@@ -44,9 +44,9 @@
 
 ## Handoff
 **Feature**: m07-publication-contracts-local-validation
-**Where**: M00–M07 implementados com suíte de 184 testes íntegra e verde.
-**In progress**: Conclusão da fase M07 e preparação para verificação independente.
-**Next step**: Submeter ao Verifier independente (tlc-spec-lean verify).
-**Blockers**: Checkpoints e Parquets reais continuam no cluster remoto; ambiente de desenvolvimento opera localmente sobre fixtures sintéticas deterministicamente verificadas (`REMOTE_SERVER=False`, `SMOKE_TEST=1`).
-**Uncommitted**: Implementação de M07 em `src/viral_cnn/reporting/transformations.py`, `src/viral_cnn/reporting/publication.py`, `configs/reproduction_m07.yaml`, `notebooks/reproduction/00_regenerate_all_paper_artifacts.ipynb`, `tests/test_m07_publication_contracts.py`.
+**Where**: M00–M07 concluídos; relatório de verificação independente registrado com PASS (16/16 checks, gate 0 errors / 0 warnings).
+**In progress**: Conclusão da fase M07 e prontidão para a execução experimental integral no cluster remoto (Etapas 0–5 do Roadmap) seguida da fase M08 ("Concluir artigo e rastrear diferenças").
+**Next step**: Submissão e orquestração dos notebooks no cluster remoto conforme a ordem de execução do Roadmap (Etapas 0–5), culminando na execução de M08.
+**Blockers**: Execução no cluster requer conectividade e ambiente JupyterHub/GPU remoto com os Parquets e checkpoints reais montados.
+**Uncommitted**: `.specs/features/m07-publication-contracts-local-validation/verification.md`, `.specs/STATE.md`.
 **Branch**: main
