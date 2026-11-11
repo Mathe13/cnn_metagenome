@@ -1,0 +1,25 @@
+# Configuração da etapa M06: Sequências Longas e Análise de Estratos (long/01–04)
+protocol_id: "m06_long_strata_audit_v1"
+seed: 42
+handle_short: "pad"
+window_size: 512
+stride: 256
+kmer_overlap_k: 15
+length_strata:
+  - [0, 512, "len_lt_512"]
+  - [512, 2000, "len_512_to_2000"]
+  - [2000, 5000, "len_2000_to_5000"]
+  - [5000, 10001, "len_5000_to_10000"]
+  - [10001, "inf", "len_gt_10000"]
+window_strata:
+  - [1, 2, "1_window"]
+  - [2, 11, "2_to_10_windows"]
+  - [11, 51, "11_to_50_windows"]
+  - [51, "inf", "gt_50_windows"]
+contig_sampling:
+  min_length: 2000
+  sample_size: 3
+  seed: 42
+is_smoke_test: false
+scientific_reproduction_certified: false
+scientific_demarcation: "DESCRIPTIVE LONG SEQUENCE EVALUATION ONLY: NCBI contigs evaluated without verified accession numbers have genome provenance unknown. Differences across length or window strata and ConvNeXt drop mechanisms constitute hypotheses and observational findings, not causal evidence of intrinsic architectural superiority without controlled multi-seed retraining."

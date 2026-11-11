@@ -344,11 +344,32 @@ def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
                 if alt.exists():
                     return alt
             return p
+    if key.startswith("results_reproduction/long_voter/"):
+        long_02_dir = os.getenv("M06_LONG_02_DIR") or os.getenv("C02_LONG_02_DIR")
+        if not long_02_dir:
+            run_id = os.getenv("M06_LONG_RUN_ID") or os.getenv("C02_LONG_RUN_ID")
+            if run_id:
+                project_root = Path(__file__).resolve().parents[2]
+                cand = (project_root / "results_reproduction" / "runs" / run_id / "long" / "02").resolve()
+                if cand.exists():
+                    long_02_dir = str(cand)
+        if long_02_dir:
+            fname = key.split("/")[-1]
+            p = (Path(long_02_dir) / fname).resolve()
+            if not p.exists() and fname == "manifest_02_voter_inference.json":
+                alt = (Path(long_02_dir) / "manifest.json").resolve()
+                if alt.exists():
+                    return alt
+            return p
     if key.startswith("results_reproduction/"):
         project_root = Path(__file__).resolve().parents[2]
         p = (project_root / key).resolve()
         if not p.exists() and key.endswith("manifest_07_motifs.json"):
             alt = (project_root / "results_reproduction" / "motifs" / "manifest.json").resolve()
+            if alt.exists():
+                return alt
+        if not p.exists() and key.endswith("manifest_02_voter_inference.json"):
+            alt = (project_root / "results_reproduction" / "long_voter" / "manifest.json").resolve()
             if alt.exists():
                 return alt
         return p
@@ -450,9 +471,9 @@ def reserve_run_directory(project_root: Union[str, Path], run_id: str, notebook_
 
 
 def reserve_c02_long_run(project_root: Union[str, Path], notebook_id: str, run_id: Optional[str] = None) -> tuple[str, Path]:
-    """Reserve a collision-free namespace for one C02 notebook execution."""
+    """Reserve a collision-free namespace for one C02 / M06 notebook execution."""
     import uuid
-    resolved_id = run_id or os.getenv("C02_LONG_RUN_ID") or f"c02-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    resolved_id = run_id or os.getenv("M06_LONG_RUN_ID") or os.getenv("C02_LONG_RUN_ID") or f"c02-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
     return resolved_id, reserve_run_directory(project_root, resolved_id, notebook_id)
 
 
