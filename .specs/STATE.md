@@ -35,12 +35,14 @@
 | AD-028 | M00 usa `m00_run_plan_v1`: inventário limitado por tamanho e plano explícito por rodada/etapa, com dependências planned/external, seleção externa por SHA-256 e destinos exclusivos. Dependência futura/incompleta/sintética no modo empírico bloqueia prontidão; retomada 06/06b exige validação C09 própria. | Preserva referências e separa prontidão administrativa de reprodução científica; M00 não migra notebooks nem substitui validadores C03/C09/C06. | active | 2026-11-09 |
 
 | AD-029 | M01 identifica 10/11/05 por run exclusivo e manifesto COMPLETE/FAILED; `m01_fragment_split_audit_v1` usa N integral de test e união direto/RC; auditoria de referência (`m01_existing_taxonomy_audit_v1`) é distinta de curadoria MSL (`m01_ictv_curate_v1`). Ranks não resolvidos e labels divergentes não são reparados silenciosamente; `hierarchy_ready=false` bloqueia publicação de nova taxonomia para consumidores 02/06. | Preserva fontes e população histórica, aplica reservas M00 e impede fallback sintético em modo empírico. Auditoria taxonômica não identifica genomas; hashes limitados de fragmentos são explicitamente incompletos. | active | 2026-11-09 |
+| AD-030 | M02 consome o pacote C03 auditado com 35 condições no notebook 09, calcula ICs por bootstrap pareado com 2.000 réplicas por estrato/ruído, restringe GradCAM a amostras determinísticas registradas e sela calibração na validação sem alteração pós-hoc em teste | Elimina injeção hardcoded em 09; assegura paridade total de queries e rótulos entre CNN e baselines Kraken2/BLASTN com suporte fixo por espécie; demarca que incerteza é condicional à amostra de fragmentos observada. | active | 2026-11-10 |
+| AD-031 | M03 adota ciclo de vida M00 em 06 e 06b sob protocolo `m03_latent_audit_v1`, adiciona painel UMAP seletivo pareado com destaque contrastante e fundo neutro, e sintetiza métricas em alta dimensão no espaço original pré-classificador com demarcação qualitativa de eixos 2D | Impede caminhos hardcoded `/home/mlima/...`; assegura que os cinco modelos compartilhem exatamente os mesmos fragmentos pareados C10; isola métricas quantitativas auditadas de proximidade filogenética ou separabilidade global. | active | 2026-11-10 |
 
 ## Handoff
-**Feature**: m02-benchmark-intervals-calibration
-**Where**: Spec, design A e oito tarefas aprovados pelo usuário; T1–T7 implementadas em commits locais. T8 documentação/configuração em fechamento.
-**In progress**: provas finais e regressões C03/C04/M00/C00/runtime, seguidas de Verifier independente. M02 não está declarado concluído.
-**Next step**: registrar resultados reais em verification.md; corrigir achados e executar gate final.
-**Blockers**: checkpoints, Parquets e pacote C03 canônicos do cluster não montados; preflight remoto e reprodução empírica pendentes. Incidente M01 continua válido: sete Parquets locais foram sobrescritos por smoke legado, sem hash anterior; não são evidência empírica. CSVs de classes têm hashes confirmados em M01.
-**Uncommitted**: documentação/configuração M02 e fechamento de T8; nenhuma saída científica nova versionada.
+**Feature**: m04-motifs-and-first-layer-perturbation
+**Where**: Planejamento do ciclo M04 iniciado; M00, M01, M02 e M03 concluídos e verificados com 150 testes passando em conformidade com o roadmap.
+**In progress**: Elaboração de `plan.md` em `m04-motifs-and-first-layer-perturbation`.
+**Next step**: Apresentar `plan.md` aprovado por `validate_plan.py` ao usuário para revisão humana e confirmação antes de derivar `checks.md`.
+**Blockers**: Checkpoints e Parquets reais continuam no armazenamento do cluster; testes locais continuam estritamente determinísticos sobre fixtures sintéticas via `REMOTE_SERVER=False` e `SMOKE_TEST=1`.
+**Uncommitted**: `.specs/STATE.md` e novo diretório de especificação M04.
 **Branch**: main

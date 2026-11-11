@@ -1,0 +1,14 @@
+# Configuração da etapa M04: Motivos de 1ª Camada e Perturbação Pareada (short/07)
+protocol_id: "m04_motifs_audit_v1"
+seed: 42
+n_repeats: 5
+control_policies:
+  - "uniform_random"
+  - "gc_matched"
+max_motifs_per_variant: 10
+motif_length: 7
+alpha_fdr: 0.05
+min_sequences_for_wilcoxon: 2
+is_smoke_test: false
+scientific_reproduction_certified: false
+biological_demarcation: "COMPOSITIONAL BASE DETECTORS ONLY: First-layer 7-mers act as local GC/nucleotide composition detectors. They are not verified functional biological transcription factor binding sites or open reading frame codons."
