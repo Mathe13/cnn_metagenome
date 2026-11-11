@@ -38,12 +38,13 @@
 | AD-030 | M02 consome o pacote C03 auditado com 35 condições no notebook 09, calcula ICs por bootstrap pareado com 2.000 réplicas por estrato/ruído, restringe GradCAM a amostras determinísticas registradas e sela calibração na validação sem alteração pós-hoc em teste | Elimina injeção hardcoded em 09; assegura paridade total de queries e rótulos entre CNN e baselines Kraken2/BLASTN com suporte fixo por espécie; demarca que incerteza é condicional à amostra de fragmentos observada. | active | 2026-11-10 |
 | AD-031 | M03 adota ciclo de vida M00 em 06 e 06b sob protocolo `m03_latent_audit_v1`, adiciona painel UMAP seletivo pareado com destaque contrastante e fundo neutro, e sintetiza métricas em alta dimensão no espaço original pré-classificador com demarcação qualitativa de eixos 2D | Impede caminhos hardcoded `/home/mlima/...`; assegura que os cinco modelos compartilhem exatamente os mesmos fragmentos pareados C10; isola métricas quantitativas auditadas de proximidade filogenética ou separabilidade global. | active | 2026-11-10 |
 | AD-032 | M04 isola o ciclo de vida do notebook 07 sob protocolo `m04_motifs_audit_v1`, exige preflight dos cinco modelos de espécie, reconcilia o esquema da Tabela 8 com C06 e gera a Figura 3 científica principal com cinco painéis (a–e) com autenticidade estrita de ConvNeXt_F | Elimina caminhos estáticos legados; assegura pareamento estrito de controle uniforme e GC na mesma sequência (|ΔGC|=0) sem viés composicional; demarca que 7-mers atuam como detectores locais de bases sem função biológica de fatores de transcrição ou códons. | active | 2026-11-10 |
+| AD-033 | M05 isola o ciclo de vida do notebook 08 sob protocolo `m05_triplets_audit_v1`, consome saídas de 07 via manifesto explícito, adota amostragem determinística de sequências com semente 42, reconcilia a Tabela 11 e F5 com `edge_table.csv` para o validador `network_edges` de C06 com teste empírico de permutação de nós, e formaliza a demarcação de que fragmentos virais de 512 bp sem ORFs constituem composição exploratória de tripletos sem função biológica de tradução | Elimina caminhos estáticos legados (`results_reproduction/motifs`); assegura paridade total de entradas entre 07 e 08; refuta a alegação espúria de correlação perfeita r=1 decorrente de sequências idênticas entre variantes; demarca que a prévia (p ≈ 0.47) não sustenta sinergia biológica. | active | 2026-11-10 |
 
 ## Handoff
-**Feature**: m05-triplet-composition-and-cooccurrence
-**Where**: M00, M01, M02, M03 e M04 concluídos, verificados por subagentes independentes com todos os gates passando.
-**In progress**: Transição para o planejamento da fase M05 (notebook `short/08_triplet_composition_and_cooccurrence.ipynb`, T11 e F5).
-**Next step**: Estruturar plano e decisões de T11/F5 para M05 em `plan.md`.
+**Feature**: m06-long-sequences-strata-analysis
+**Where**: M00, M01, M02, M03, M04 e M05 concluídos, com suíte de testes íntegra e verificada.
+**In progress**: Transição para o planejamento da fase M06 (notebooks `long/01–04`).
+**Next step**: Estruturar plano e decisões para M06 em `plan.md`.
 **Blockers**: Checkpoints e Parquets reais continuam no cluster remoto; ambiente de desenvolvimento opera localmente sobre fixtures sintéticas deterministicamente verificadas (`REMOTE_SERVER=False`, `SMOKE_TEST=1`).
-**Uncommitted**: Relatório `verification.md` de M04 e atualização de `.specs/STATE.md`.
+**Uncommitted**: Implementação de M05 em `src/viral_cnn/m05_workflow.py`, `tests/test_m05_triplets_and_cooccurrence.py`, `configs/reproduction_m05.yaml`, `notebooks/reproduction/short/08_*.ipynb`.
 **Branch**: main

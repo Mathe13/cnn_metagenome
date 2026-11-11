@@ -856,6 +856,7 @@ def analyze_cooccurrence_pairs(
 
     extreme = 0
     n_valid_null = 0
+    null_dist: List[float] = []
     for _ in range(n_permutations):
         perm_vals = rng.permutation(node_values)
         x_perm = perm_vals[u_indices]
@@ -866,6 +867,7 @@ def analyze_cooccurrence_pairs(
             continue
         r_null = float(np.corrcoef(xp, yp)[0, 1])
         n_valid_null += 1
+        null_dist.append(r_null)
         extreme += abs(r_null) >= abs(r_bidir) - 1e-12
     p_perm = (extreme + 1) / (n_valid_null + 1) if n_valid_null else np.nan
 
@@ -879,6 +881,7 @@ def analyze_cooccurrence_pairs(
         "icc_symmetric": float(icc),
         "r_bidirectional": float(r_bidir),
         "p_perm": float(p_perm),
+        "null_distribution": null_dist,
     }
 
 

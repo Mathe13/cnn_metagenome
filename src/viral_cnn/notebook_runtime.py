@@ -272,7 +272,12 @@ NOTEBOOK_REQUIREMENTS: Dict[str, List[Dict[str, Any]]] = {
         {"path": "checkpoints/convnext_transfer_species", "kind": "file"},
         {"path": "checkpoints/convnext_noise_species", "kind": "file"},
     ],
-    "short/08": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded"]}, {"path": "results_reproduction/motifs/manifest_07_motifs.json", "kind": "file", "external": True}],
+    "short/08": [
+        {"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded"]},
+        {"path": "results_reproduction/motifs/manifest_07_motifs.json", "kind": "file", "external": True},
+        {"path": "results_reproduction/motifs/motif_summary.parquet", "kind": "parquet", "columns": ["motif"], "external": True},
+        *[{"path": f"results_reproduction/motifs/motif_interaction_jaccard_{v}.parquet", "kind": "parquet", "external": True} for v in ("resnet50_species", "resnet_noise_species", "convnext_zero_species", "convnext_transfer_species", "convnext_noise_species")],
+    ],
     "short/09": [{"path": "short/kraken_blast_dir", "kind": "directory"}, {"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}, {"path": "checkpoints/resnet_clean_species", "kind": "file"}],
     "short/10": [{"path": "short/species_parquet_dir", "kind": "parquet", "columns": ["sequence_padded", "label"]}],
     "short/11": [{"path": "short/ictv_master", "kind": "file"}, {"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"}],
@@ -329,9 +334,24 @@ def preflight_latent_inputs(
 
 def _resolve_requirement(topology: JupyterHubDataTopology, key: str) -> Path:
     """Resolve a dotted requirement key from the canonical topology."""
+    if key.startswith("results_reproduction/motifs/"):
+        motifs_dir = os.getenv("M05_MOTIFS_07_DIR") or os.getenv("MOTIFS_07_DIR")
+        if motifs_dir:
+            fname = key.split("/")[-1]
+            p = (Path(motifs_dir) / fname).resolve()
+            if not p.exists() and fname == "manifest_07_motifs.json":
+                alt = (Path(motifs_dir) / "manifest.json").resolve()
+                if alt.exists():
+                    return alt
+            return p
     if key.startswith("results_reproduction/"):
         project_root = Path(__file__).resolve().parents[2]
-        return (project_root / key).resolve()
+        p = (project_root / key).resolve()
+        if not p.exists() and key.endswith("manifest_07_motifs.json"):
+            alt = (project_root / "results_reproduction" / "motifs" / "manifest.json").resolve()
+            if alt.exists():
+                return alt
+        return p
     if key.startswith("long/") and key.count("/") == 1:
         resolved = topology.resolve_long_artifact_path(key.split("/", 1)[1])
         return (resolved or (topology.root / key.split("/", 1)[1])).resolve()

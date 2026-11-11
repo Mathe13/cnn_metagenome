@@ -1,0 +1,13 @@
+# Configuração da etapa M05: Composição Exploratória de Tripletos e Coocorrência (short/08)
+protocol_id: "m05_triplets_audit_v1"
+seed: 42
+reading_frames:
+  - "frame0"
+  - "forward_3frames"
+  - "six_frames"
+max_sequences_sampled: 1000
+top_k_cooccurrence_pairs: 200
+n_permutations: 1000
+is_smoke_test: false
+scientific_reproduction_certified: false
+biological_demarcation: "EXPLORATORY TRIPLET COMPOSITION ONLY: DNA fragments lack verified biological open reading frames (ORFs). Triplet scores and RSCU profiles reflect local nucleotide/codon composition, not demonstrated translation, translation initiation (ATG) or termination (STOP) mechanisms, nor causal protein synthesis."
