@@ -162,13 +162,173 @@ def _is_manifest_input(path: Path) -> bool:
     return isinstance(value, dict) and bool({"is_smoke_test", "protocol", "inputs", "dependencies"} & set(value))
 
 
-def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True) -> list[dict[str, Any]]:
+def validate_artifact_provenance(manifest_data: dict[str, Any], project_root: Path) -> dict[str, Any]:
+    """Validate that an empirical manifest satisfies the complete 12-attribute provenance contract.
+
+    Attributes verified:
+    1. is_smoke_test: must be explicitly False (boolean).
+    2. git_commit: non-empty string.
+    3. execution timestamp: created_utc or timestamp_utc (non-empty string).
+    4. software/environment metadata: versions or library_versions (non-empty dict).
+    5. seed: integer.
+    6. split: split_id or split (non-empty string).
+    7. model variant: model_variants or model_variant or checkpoints (non-empty).
+    8. noise conditions: noise_conditions or noise_level or noise_levels (present).
+    9. dataset: dataset_sha256 or dataset_manifest_sha256 (non-empty string).
+    10. checkpoint: checkpoint_sha256s or checkpoints (non-empty dict, list, or string).
+    11. configuration: configuration_sha256 or config or derivation or protocol (present and non-empty).
+    12. parent artifacts / inputs: non-empty list of dependencies, all existing on disk with matching sha256,
+        and no parent manifesting is_smoke_test=True.
+    """
+    if not isinstance(manifest_data, dict):
+        raise PublicationValidationError("Manifest data must be a dictionary.")
+
+    # 1. is_smoke_test
+    if "is_smoke_test" not in manifest_data:
+        raise PublicationValidationError("Manifest lacks explicit is_smoke_test flag.")
+    if manifest_data["is_smoke_test"] is not False:
+        raise PublicationValidationError(
+            f"Artifact declared is_smoke_test={manifest_data['is_smoke_test']}; empirical publication requires is_smoke_test=false."
+        )
+
+    # 2. git_commit
+    commit = manifest_data.get("git_commit")
+    if not commit or not isinstance(commit, str) or not commit.strip():
+        raise PublicationValidationError("Manifest lacks required non-empty git_commit.")
+
+    # 3. execution timestamp
+    ts = manifest_data.get("created_utc") or manifest_data.get("timestamp_utc")
+    if not ts or not isinstance(ts, str) or not ts.strip():
+        raise PublicationValidationError("Manifest lacks required execution timestamp (created_utc or timestamp_utc).")
+
+    # 4. software/environment metadata
+    versions = manifest_data.get("library_versions") or manifest_data.get("versions")
+    if not versions or not isinstance(versions, dict):
+        raise PublicationValidationError("Manifest lacks required software environment metadata (versions or library_versions).")
+
+    # 5. seed
+    seed = manifest_data.get("seed")
+    if seed is None or not isinstance(seed, int):
+        raise PublicationValidationError("Manifest lacks required integer seed.")
+
+    # 6. split
+    split = manifest_data.get("split_id") or manifest_data.get("split")
+    if not split or not isinstance(split, str) or not split.strip():
+        raise PublicationValidationError("Manifest lacks required split identification (split_id or split).")
+
+    # 7. model variants
+    scientific_id = manifest_data.get("scientific_identity") if isinstance(manifest_data.get("scientific_identity"), dict) else {}
+    variants = (
+        scientific_id.get("model_variants")
+        or manifest_data.get("model_variants")
+        or manifest_data.get("model_variant")
+        or manifest_data.get("checkpoints")
+    )
+    if not variants:
+        raise PublicationValidationError("Manifest lacks required model variant identification.")
+
+    # 8. noise level / conditions
+    noise = (
+        scientific_id.get("noise_conditions")
+        or manifest_data.get("noise_conditions")
+        or manifest_data.get("noise_level")
+        or ("noise_levels" in manifest_data.get("metrics_summary", {}))
+    )
+    if noise is None:
+        raise PublicationValidationError("Manifest lacks required noise level or noise conditions.")
+
+    # 9. dataset SHA256
+    dataset_sha = (
+        scientific_id.get("dataset_sha256")
+        or manifest_data.get("dataset_sha256")
+        or manifest_data.get("dataset_manifest_sha256")
+    )
+    if not dataset_sha or not isinstance(dataset_sha, str) or not dataset_sha.strip():
+        raise PublicationValidationError("Manifest lacks required dataset SHA256.")
+
+    # 10. checkpoints
+    checkpoints = (
+        scientific_id.get("checkpoint_sha256s")
+        or manifest_data.get("checkpoint_sha256s")
+        or manifest_data.get("checkpoints")
+    )
+    if checkpoints is None:
+        raise PublicationValidationError("Manifest lacks required checkpoint identification.")
+
+    # 11. configuration SHA256 / derivation / protocol
+    config_ref = (
+        manifest_data.get("configuration_sha256")
+        or manifest_data.get("config_sha256")
+        or manifest_data.get("derivation")
+        or manifest_data.get("protocol")
+    )
+    if not config_ref:
+        raise PublicationValidationError("Manifest lacks required configuration or protocol derivation.")
+
+    # 12. parent artifacts / inputs
+    inputs = (
+        manifest_data.get("parent_artifacts")
+        or manifest_data.get("inputs")
+        or manifest_data.get("dependencies")
+        or []
+    )
+    if manifest_data.get("parent_manifest_path"):
+        inputs = [*inputs, {"path": manifest_data["parent_manifest_path"], "sha256": manifest_data.get("parent_manifest_sha256")}]
+    if not inputs:
+        raise PublicationValidationError("Manifest lacks parent artifacts or input records.")
+
+    root = Path(project_root)
+    verified_parents: list[dict[str, str]] = []
+    for record in inputs:
+        if isinstance(record, (str, Path)):
+            p = _resolve(root, str(record))
+            expected_sha = None
+        elif isinstance(record, dict) and "path" in record:
+            p = _resolve(root, str(record["path"]))
+            expected_sha = record.get("sha256")
+        else:
+            raise PublicationValidationError(f"Invalid input record format: {record}")
+        if not p.exists():
+            raise PublicationValidationError(f"Parent artifact missing on disk: {p}")
+        actual_sha = sha256_path(p)
+        if expected_sha and expected_sha != actual_sha:
+            raise PublicationValidationError(
+                f"Parent artifact SHA-256 mismatch for {p}: expected {expected_sha}, got {actual_sha}"
+            )
+        if p.is_file() and _is_manifest_input(p):
+            if _inspect_transitive_manifest(p, root):
+                raise PublicationValidationError(f"Parent manifest {p} declares synthetic or smoke test evidence.")
+        verified_parents.append({"path": str(p), "sha256": actual_sha})
+
+    return {
+        "git_commit": commit,
+        "is_smoke_test": False,
+        "execution_timestamp": ts,
+        "versions": versions,
+        "seed": seed,
+        "split": split,
+        "model_variants": variants,
+        "noise": noise,
+        "dataset_sha256": dataset_sha,
+        "checkpoints": checkpoints,
+        "configuration": config_ref,
+        "verified_parents": verified_parents,
+    }
+
+
+def validate_selection(
+    config: dict[str, Any],
+    *,
+    strict_empirical: bool = True,
+    strict_provenance: bool = False,
+) -> list[dict[str, Any]]:
     """Validate only selected evidence and its declared transitive dependencies.
 
     Invalid entries become explicit diagnostic rows. Strict mode raises after all
     selected entries have been inspected, preserving the complete gap report.
     """
     root = Path(config["_project_root"])
+    enforce_provenance = strict_provenance or config.get("strict_provenance", False)
     rows: list[dict[str, Any]] = []
     for item in config["items"]:
         iid = item["item_id"]
@@ -235,6 +395,8 @@ def validate_selection(config: dict[str, Any], *, strict_empirical: bool = True)
                 raise PublicationValidationError(f"{iid}: manifest status must be COMPLETE")
             if declared.get("evidence_kind") not in {"empirical", "structural"}:
                 raise PublicationValidationError(f"{iid}: manifest {manifest}: evidence_kind must be empirical or structural")
+            if enforce_provenance and declared.get("evidence_kind") == "empirical":
+                validate_artifact_provenance(declared, root)
             if declared.get("evidence_kind") == "structural":
                 derivation = declared.get("derivation")
                 if not isinstance(derivation, dict) or not {"source", "config"}.issubset(derivation):

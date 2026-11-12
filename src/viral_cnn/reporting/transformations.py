@@ -8,7 +8,9 @@ computes sample support N, and emits derived manifests.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
+import platform
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from viral_cnn.reporting.publication import PublicationValidationError
+from viral_cnn.reporting.publication import PublicationValidationError, _git_state
 from viral_cnn.utils.logging_utils import log_artifact_path
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".svg"}
@@ -89,6 +91,23 @@ def emit_derived_manifest(
     parent_sha = sha256_file(parent_manifest_path)
     artifact_sha = sha256_file(output_artifact_path)
 
+    git_commit = parent_manifest.get("git_commit")
+    if not git_commit:
+        project_root = next(
+            (p for p in output_artifact_path.parents if (p / ".git").exists() or (p / "src" / "viral_cnn").is_dir()),
+            output_artifact_path.parent,
+        )
+        git_commit, _ = _git_state(project_root)
+
+    versions = parent_manifest.get("library_versions") or parent_manifest.get("versions")
+    if not versions or not isinstance(versions, dict):
+        versions = {"python": platform.python_version()}
+        for pkg in ("torch", "numpy", "pandas", "pyarrow", "matplotlib", "PyYAML"):
+            try:
+                versions[pkg] = importlib.metadata.version(pkg)
+            except importlib.metadata.PackageNotFoundError:
+                versions[pkg] = "unavailable"
+
     manifest_data: dict[str, Any] = {
         "item_id": item_id,
         "protocol": "c06_strict_v1",
@@ -100,12 +119,17 @@ def emit_derived_manifest(
         "artifact_sha256": artifact_sha,
         "parent_manifest_path": str(parent_manifest_path),
         "parent_manifest_sha256": parent_sha,
+        "git_commit": git_commit or "unknown",
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "library_versions": versions,
+        "configuration_sha256": parent_manifest.get("configuration_sha256", parent_sha),
+        "inputs": [{"path": str(parent_manifest_path), "sha256": parent_sha}],
+        "parent_artifacts": [{"path": str(parent_manifest_path), "sha256": parent_sha}],
         "seed": parent_manifest.get("seed", 42),
         "split_id": parent_manifest.get("split_id", "test"),
         "n": int(support_n),
         "support": int(support_n),
         "scientific_identity": parent_manifest.get("scientific_identity", {}),
-        "created_utc": datetime.now(timezone.utc).isoformat(),
     }
     if extra_metadata:
         manifest_data.update(extra_metadata)

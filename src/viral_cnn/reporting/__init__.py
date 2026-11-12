@@ -22,6 +22,11 @@ from viral_cnn.reporting.manuscript import (
     compile_manuscript,
     generate_manuscript_content,
 )
+from viral_cnn.reporting.publication import (
+    validate_artifact_provenance,
+    validate_selection,
+    assemble_publication,
+)
 
 __all__ = [
     "generate_all_tables",
@@ -40,5 +45,8 @@ __all__ = [
     "build_manuscript_variants",
     "compile_manuscript",
     "generate_manuscript_content",
+    "validate_artifact_provenance",
+    "validate_selection",
+    "assemble_publication",
 ]
 
