@@ -1,6 +1,12 @@
 """Model architectures, registry, and factory builder."""
 from .resnet import ResNet50_1D, BottleneckBlock1D
-from .convnext import ConvNeXt_Tiny_1D, ConvNeXtBlock1D, LayerNorm1d
+from .convnext import (
+    HybridConvNeXt1D,
+    ConvNeXtInspired1D,
+    ConvNeXt_Tiny_1D,
+    ConvNeXtBlock1D,
+    LayerNorm1d,
+)
 from .builder import build_model, MODEL_REGISTRY
 from .registry import (
     ModelVariantSpec,
@@ -14,6 +20,8 @@ from .registry import (
 __all__ = [
     "ResNet50_1D",
     "BottleneckBlock1D",
+    "HybridConvNeXt1D",
+    "ConvNeXtInspired1D",
     "ConvNeXt_Tiny_1D",
     "ConvNeXtBlock1D",
     "LayerNorm1d",

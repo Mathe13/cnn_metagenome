@@ -3,6 +3,7 @@ ConvNeXt-1D model architecture for genomic sequence classification.
 Directly equivalent to `short/utils/models.py:convnext_tiny_1d` (HybridConvNeXt).
 """
 
+from typing import Any, Dict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -76,7 +77,30 @@ class ConvNeXtBlock1D(nn.Module):
         return x
 
 
-class ConvNeXt_Tiny_1D(nn.Module):
+class HybridConvNeXt1D(nn.Module):
+    """
+    1D ConvNeXt-inspired hybrid architecture for genomic sequence classification.
+
+    The architecture incorporates:
+      - ResNet-style stem (Conv1d 7x1, BatchNorm1d, ReLU, MaxPool1d)
+      - [3, 4, 6, 3] depthwise separable stages with inverted bottleneck blocks
+      - Custom channel progression ([256, 512, 1024, 2048])
+      - Global max pooling into linear classification head with 2048 input features
+    """
+
+    ARCHITECTURE_METADATA: Dict[str, Any] = {
+        "architecture_family": "convnext-inspired",
+        "implementation": "HybridConvNeXt1D",
+        "stage_depths": [3, 4, 6, 3],
+        "stem": "resnet-style",
+        "pooling": "global-max",
+    }
+
+    @classmethod
+    def get_architecture_metadata(cls) -> Dict[str, Any]:
+        """Returns structured metadata characterizing the hybrid architecture."""
+        return dict(cls.ARCHITECTURE_METADATA)
+
     def __init__(
         self,
         num_classes: int = 13683,
@@ -84,7 +108,7 @@ class ConvNeXt_Tiny_1D(nn.Module):
         num_features: int = NUM_FEATURES,
         dropout_rate: float = 0.3,
     ):
-        super(ConvNeXt_Tiny_1D, self).__init__()
+        super().__init__()
         self.num_classes = num_classes
         self.max_seq_len = max_seq_len
         self.num_features = num_features
@@ -166,4 +190,18 @@ class ConvNeXt_Tiny_1D(nn.Module):
         x = self.dropout(x)
         x = self.fc(x)
         return x
+
+
+# Backward compatibility aliases
+ConvNeXtInspired1D = HybridConvNeXt1D
+ConvNeXt_Tiny_1D = HybridConvNeXt1D
+
+__all__ = [
+    "LayerNorm1d",
+    "ConvNeXtBlock1D",
+    "HybridConvNeXt1D",
+    "ConvNeXtInspired1D",
+    "ConvNeXt_Tiny_1D",
+]
+
 

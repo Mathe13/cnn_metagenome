@@ -4,14 +4,16 @@ Model builder and factory function for 1D genomic architectures.
 
 import torch.nn as nn
 from .resnet import ResNet50_1D
-from .convnext import ConvNeXt_Tiny_1D
+from .convnext import HybridConvNeXt1D, ConvNeXtInspired1D, ConvNeXt_Tiny_1D
 from ..data.encoding import NUM_FEATURES
 
 MODEL_REGISTRY = {
     "resnet50_1d": ResNet50_1D,
     "resnet50": ResNet50_1D,
+    "hybrid_convnext_1d": HybridConvNeXt1D,
+    "convnext_inspired_1d": ConvNeXtInspired1D,
     "convnext_tiny_1d": ConvNeXt_Tiny_1D,
-    "convnext": ConvNeXt_Tiny_1D,
+    "convnext": HybridConvNeXt1D,
 }
 
 
