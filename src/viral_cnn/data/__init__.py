@@ -6,6 +6,11 @@ from .encoding import (
     OneHotEmbedding,
     encode_spatial_one_hot,
 )
+from .overlap_contract import (
+    build_dataset_overlap_audit,
+    write_dataset_overlap_audit_artifact,
+    audit_manuscript_terminology,
+)
 
 __all__ = [
     "NUCLEOTIDES",
@@ -13,5 +18,8 @@ __all__ = [
     "encode_sequence_tokens",
     "OneHotEmbedding",
     "encode_spatial_one_hot",
+    "build_dataset_overlap_audit",
+    "write_dataset_overlap_audit_artifact",
+    "audit_manuscript_terminology",
 ]
 

@@ -64,7 +64,7 @@ Taxonomic reference labels were curated combining the International Committee on
 
 
 \subsection{Dataset Partitioning and Split Audit}
-Sequences were segmented into 512-bp non-overlapping fragments and partitioned according to an 80/10/10 stratified split across classes using seed 42. While no identical 512-bp sequence fragment appears across partitions, audit results (AD-007, S02/S03) establish that fragments derived from the same underlying viral genome accessions are present across train, validation, and test sets. Consequently, evaluation metrics measure closed-set fragment classification rather than generalization to unseen viral genomes.
+Sequences were segmented into 512-bp non-overlapping fragments and partitioned according to an 80/10/10 stratified split across classes using seed 42. While the split is strictly row-disjoint, empirical sequence identity audits (AD-007, S13) establish that approximately 95.91\% of evaluated test queries exhibit exact or reverse-complement sequence identity with training references due to reference redundancy. Consequently, evaluation metrics measure fragment-level closed-set classification on a known-reference distribution rather than unseen-genome generalization. Queries without exact training matches are evaluated separately under the no-exact-overlap subset stratum.
 
 
 
@@ -398,7 +398,7 @@ The results demonstrate a pronounced trade-off between clean-sequence accuracy a
 
 Methodological audits conducted in this work clarify four critical aspects:
 \begin{enumerate}
-\item \textbf{Closed-set Fragment Split:} The 80/10/10 split operates across sequence fragments. While fragment sequences are disjunct, genome-level sharing across partitions means performance reflects viral read recognition within known genomes rather than generalization to unseen viral species or genomes.
+\item \textbf{Closed-set Fragment Split and Overlap:} The 80/10/10 split operates across row-disjoint sequence fragments. While rows are disjunct, sequence-level sharing (~95.91\% exact or reverse-complement overlap) means performance reflects fragment-level closed-set classification within a known-reference distribution rather than generalization to unseen viral genomes. Subsets without training hits are analyzed under the no-exact-overlap subset stratum.
 \item \textbf{Long-sequence Voting Mechanics:} The 72.69\% accuracy of ResNet50 on long NCBI sequences reflects contigs with accession overlap in the reference database. The drop in ConvNeXt is driven by non-calibrated logit pulling and length-dependent read simulation biases.
 \item \textbf{Sequence Motifs vs. Compositional Detectors:} When matched against local GC content, learned homopolymer 7-mers lose specific significance, proving that first-layer filters primarily capture base composition and nucleotide entropy rather than biological regulatory motifs.
 \item \textbf{Confidence and Calibration:} High predictive confidence under noise does not imply reliable calibration; models enter a regime of severe overconfidence, requiring formal metrics (ECE, Brier, NLL) and temperature scaling adjusted strictly on validation data.
