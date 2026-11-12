@@ -402,8 +402,6 @@ def render_tables(config: dict[str, Any], output_dir: Path, rows: list[dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {row["item_id"]: row for row in rows}
     outputs: dict[str, Path] = {}
-    rendered_sources: dict[str, dict[str, Any]] = {}
-    rendered_sources: dict[str, Any] = {}
     reconciliation: list[dict[str, Any]] = []
     for item in config["items"]:
         if not item["item_id"].startswith("T"):
