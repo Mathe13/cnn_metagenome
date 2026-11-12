@@ -46,12 +46,13 @@
 | AD-038 | Publicação estrita por padrão e isolamento de relatórios históricos (S12 / S19): `generate_all_tables` adota `strict_empirical=True` por padrão exigindo `publication_config`; isola relatórios históricos em `generate_historical_snapshot_tables` com metadados explícitos `publication_admissible: False` | Elimina a emissão acidental de tabelas com dados de fallback ou sintéticos no fluxo primário de submissão do manuscrito; exige seleção explícita auditada de evidências C06 ou opt-in explícito (`strict_empirical=False`) para reproduções legadas. | active | 2026-11-11 |
 | AD-039 | Endurecimento de proveniência de artefatos empíricos e propagação de linhagem (S15): `validate_artifact_provenance` valida os 12 atributos obrigatórios (git commit, data, versões de software, seed, split, variantes, ruído, dataset SHA256, checkpoints, configuração, pais empíricos sem falhas e `is_smoke_test=false`); `emit_derived_manifest` propaga linhagem upstream completa | Assegura que nenhum artefato sem metadados completos de ambiente, versão de software, commit de código ou com ancestral sintético/ausente seja admitido na cadeia empírica de publicação. | active | 2026-11-11 |
 | AD-040 | Contrato científico de sobreposição de dataset e reconciliação do manuscrito (S13): formaliza a distinção entre pertinência de classe closed-set (`Species_test ⊆ Species_train`), disjunção de linhas (`row_train ∩ row_test = ∅`) e sobreposição de sequências (~95,91% exato/RC); emite o artefato JSON canônico `sequence_identity_audit`; audita a terminologia do manuscrito via `audit_manuscript_terminology` e reconcilia o texto eliminando alegações imprecisas de disjunção de sequências | Impede que a alta redundância de referências genômicas seja confundida com disjunção de sequências ou generalização a genomas não vistos, alinhando rigorosamente código, auditorias e manuscrito. | active | 2026-11-11 |
+| AD-041 | Validação fail-fast de rótulos em calibração probabilística (S16): `compute_calibration_metrics` e `compute_reliability_diagram` impõem limites fechados `0 <= y_true < n_classes` com política padrão `invalid_label_policy="raise"`, emitindo contagem e exemplos de violações; fornecem política de exclusão explícita (`invalid_label_policy="exclude"`) com conservação estrita do denominador e amostras válidas | Elimina o clamping tolerante silencioso (`valid_target_mask` com `p_true=0.0`) que mascarava erros de rotulagem/indexação (ex: offset 1-based ou labels de abstenção -1) gerando NLL artificialmente inflado e escores de Brier distorcidos em vez de interromper execuções malformadas. | active | 2026-11-11 |
 
 ## Handoff
-**Feature**: s13-dataset-overlap-contract
-**Where**: Milestone C em andamento (S13 concluído e verificado com 8/8 checks PASS; gate 0 errors / 0 warnings).
-**In progress**: Transição para S16 (Validação fail-fast de rótulos de calibração) e S18 (Identidade e metadados de arquitetura ConvNeXt).
-**Next step**: Especificação e implementação de S16 / S18 conforme o roadmap.
+**Feature**: s16-calibration-label-validation
+**Where**: Milestone D em andamento (S16 concluído e verificado com 7/7 checks PASS; gate 0 errors / 0 warnings).
+**In progress**: Transição para S18 (Identidade e metadados de arquitetura ConvNeXt) ou S17 (Scheduler API).
+**Next step**: Especificação e implementação de S18 (Milestone C) ou S17 (Milestone D) conforme o roadmap.
 **Blockers**: Nenhum para o desenvolvimento local de código e contratos.
-**Uncommitted**: `.specs/features/s13-dataset-overlap-contract/verification.md`, `.specs/STATE.md`.
+**Uncommitted**: `.specs/features/s16-calibration-label-validation/verification.md`, `.specs/STATE.md`.
 **Branch**: main
