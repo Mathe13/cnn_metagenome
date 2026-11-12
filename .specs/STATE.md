@@ -45,12 +45,13 @@
 | AD-037 | Controles pareados estruturados (S11 / S14) adotam a classe `MatchedControl(start, policy, quality, distance)` com vocabulário formal (`exact`, `relaxed_1`, `unmatched_fallback`, `unavailable`); eliminam a degradação silenciosa de controles GC ($\pm 1$) e complexidade; suportam `strict_matching=True` na análise primária e quantificação de cobertura via `summarize_matched_control_coverage` | Impede que controles com desvio de GC de 14,3% ou fallbacks não-pareados sejam promovidos silenciosamente a pareamentos perfeitos sem rotulagem explícita; preserva retrocompatibilidade como índice inteiro e expõe métricas de cobertura de pareamento (`exact_match_rate`). | active | 2026-11-11 |
 | AD-038 | Publicação estrita por padrão e isolamento de relatórios históricos (S12 / S19): `generate_all_tables` adota `strict_empirical=True` por padrão exigindo `publication_config`; isola relatórios históricos em `generate_historical_snapshot_tables` com metadados explícitos `publication_admissible: False` | Elimina a emissão acidental de tabelas com dados de fallback ou sintéticos no fluxo primário de submissão do manuscrito; exige seleção explícita auditada de evidências C06 ou opt-in explícito (`strict_empirical=False`) para reproduções legadas. | active | 2026-11-11 |
 | AD-039 | Endurecimento de proveniência de artefatos empíricos e propagação de linhagem (S15): `validate_artifact_provenance` valida os 12 atributos obrigatórios (git commit, data, versões de software, seed, split, variantes, ruído, dataset SHA256, checkpoints, configuração, pais empíricos sem falhas e `is_smoke_test=false`); `emit_derived_manifest` propaga linhagem upstream completa | Assegura que nenhum artefato sem metadados completos de ambiente, versão de software, commit de código ou com ancestral sintético/ausente seja admitido na cadeia empírica de publicação. | active | 2026-11-11 |
+| AD-040 | Contrato científico de sobreposição de dataset e reconciliação do manuscrito (S13): formaliza a distinção entre pertinência de classe closed-set (`Species_test ⊆ Species_train`), disjunção de linhas (`row_train ∩ row_test = ∅`) e sobreposição de sequências (~95,91% exato/RC); emite o artefato JSON canônico `sequence_identity_audit`; audita a terminologia do manuscrito via `audit_manuscript_terminology` e reconcilia o texto eliminando alegações imprecisas de disjunção de sequências | Impede que a alta redundância de referências genômicas seja confundida com disjunção de sequências ou generalização a genomas não vistos, alinhando rigorosamente código, auditorias e manuscrito. | active | 2026-11-11 |
 
 ## Handoff
-**Feature**: s15-artifact-provenance-hardening
-**Where**: Milestone B concluído (S12, S19, S15 concluídos e verificados por subagentes independentes com PASS; gates 0 errors / 0 warnings).
-**In progress**: Transição para Milestone C — Reconciliação e Calibração (S13 — Contrato de overlap/reconciliação do manuscrito, S16 — Validação rápida de rótulos de calibração).
-**Next step**: Especificação e implementação de S13 / S16 conforme DAG em `ROADMAP_IMPROVEMENTS.md`.
+**Feature**: s13-dataset-overlap-contract
+**Where**: Milestone C em andamento (S13 concluído e verificado com 8/8 checks PASS; gate 0 errors / 0 warnings).
+**In progress**: Transição para S16 (Validação fail-fast de rótulos de calibração) e S18 (Identidade e metadados de arquitetura ConvNeXt).
+**Next step**: Especificação e implementação de S16 / S18 conforme o roadmap.
 **Blockers**: Nenhum para o desenvolvimento local de código e contratos.
-**Uncommitted**: `.specs/features/s15-artifact-provenance-hardening/verification.md`, `.specs/STATE.md`.
+**Uncommitted**: `.specs/features/s13-dataset-overlap-contract/verification.md`, `.specs/STATE.md`.
 **Branch**: main
