@@ -2,6 +2,8 @@
 
 from viral_cnn.reporting.tables import (
     generate_all_tables,
+    generate_publication_tables,
+    generate_historical_snapshot_tables,
     generate_table_1_metrics,
     generate_table_2_profiling,
     generate_table_3_noise_degradation,
@@ -23,6 +25,8 @@ from viral_cnn.reporting.manuscript import (
 
 __all__ = [
     "generate_all_tables",
+    "generate_publication_tables",
+    "generate_historical_snapshot_tables",
     "generate_table_1_metrics",
     "generate_table_2_profiling",
     "generate_table_3_noise_degradation",

@@ -34,7 +34,7 @@ class TestReportingTables(unittest.TestCase):
 
     def test_generate_all_tables_formats(self):
         """C1: generate_all_tables produces Tables 1-12 in csv, md, and tex."""
-        tables = generate_all_tables(self.output_dir, formats=("csv", "md", "tex"))
+        tables = generate_all_tables(self.output_dir, formats=("csv", "md", "tex"), strict_empirical=False)
         self.assertEqual(len(tables), 12)
         for i in range(1, 13):
             csv_file = self.output_dir / f"table_{i}.csv"

@@ -296,63 +296,46 @@ def _serialize_table(df: pd.DataFrame, out_path_base: Path, formats: tuple[str, 
         df.to_latex(out_path_base.with_suffix(".tex"), index=False)
 
 
-def generate_all_tables(
+def generate_publication_tables(
+    output_dir: Path,
+    publication_config: Path,
+    formats: tuple[str, ...] = ("csv", "md", "tex"),
+) -> dict[int, pd.DataFrame]:
+    """Generate publication tables verified against an explicit C06 evidence selection."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_path = Path(publication_config)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Publication config does not exist: {config_path}")
+
+    from viral_cnn.reporting.publication import load_publication_config, render_tables, validate_selection
+
+    config = load_publication_config(config_path)
+    rows = validate_selection(config, strict_empirical=True)
+    render_tables(config, output_dir, rows)
+    return {
+        int(item["item_id"][1:]): pd.read_csv(output_dir / f"table_{item['item_id'][1:]}.csv")
+        for item in config.get("items", [])
+        if item.get("item_id", "").startswith("T") and (output_dir / f"table_{item['item_id'][1:]}.csv").exists()
+    }
+
+
+def generate_historical_snapshot_tables(
     output_dir: Path,
     results_dir: Path = Path("results_reproduction"),
-    strict_empirical: bool = False,
     formats: tuple[str, ...] = ("csv", "md", "tex"),
-    publication_config: Path | None = None,
-) -> dict[int, pd.DataFrame]:
-    """Generate tables; strict mode requires a C06 explicit evidence selection.
-
-    ``strict_empirical=False`` preserves the legacy historical generator. New C06
-    publication output is rendered from the selected artifacts only.
-    """
+) -> tuple[dict[int, pd.DataFrame], dict[str, Any]]:
+    """Generates legacy snapshot tables 1-12 with explicit non-admissible provenance metadata."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     results_dir = Path(results_dir)
 
-    if strict_empirical:
-        if publication_config is None:
-            raise RuntimeError(
-                "Strict empirical table generation requires publication_config; "
-                "directory-wide manifest discovery is not an admissibility check."
-            )
-        from viral_cnn.reporting.publication import load_publication_config, render_tables, validate_selection
+    metadata = {
+        "evidence_class": "historical_snapshot",
+        "publication_admissible": False,
+        "description": "Legacy historical snapshot tables generated without strict C06 selection.",
+    }
 
-        config = load_publication_config(Path(publication_config))
-        rows = validate_selection(config, strict_empirical=True)
-        render_tables(config, output_dir, rows)
-        return {
-            int(item["item_id"][1:]): pd.read_csv(output_dir / f"table_{item['item_id'][1:]}.csv")
-            for item in config["items"] if item["item_id"].startswith("T")
-        }
-
-    # 1. Enforce strict empirical check if requested
-    if strict_empirical:
-        if not results_dir.exists():
-            raise RuntimeError(f"Strict empirical mode failed: results directory {results_dir} does not exist.")
-        manifests = (
-            list(results_dir.rglob("manifest*.json"))
-            + list(results_dir.rglob("manifest*.yaml"))
-            + list(results_dir.rglob("manifest*.yml"))
-        )
-        if not manifests:
-            raise RuntimeError(f"Strict empirical mode failed: no manifests found in {results_dir}.")
-        for m in manifests:
-            if m.suffix == ".json":
-                try:
-                    data = json.loads(m.read_text(encoding="utf-8"))
-                    if data.get("is_smoke_test") is True:
-                        raise RuntimeError(f"Strict empirical mode failed: smoke test manifest detected at {m}")
-                except json.JSONDecodeError:
-                    pass
-            elif m.suffix in (".yaml", ".yml"):
-                content = m.read_text(encoding="utf-8")
-                if "is_smoke_test: true" in content or "is_smoke_test: True" in content:
-                    raise RuntimeError(f"Strict empirical mode failed: smoke test manifest detected at {m}")
-
-    # 2. Base generation
     t1 = generate_table_1_metrics()
     t2 = generate_table_2_profiling()
     t3 = generate_table_3_noise_degradation()
@@ -428,7 +411,7 @@ def generate_all_tables(
         12: "Sliding-window voter consensus on NCBI long contigs.",
     }
 
-    # 3. Dynamic loading from results_dir if artifacts exist
+    # Dynamic loading from results_dir if artifacts exist
     if results_dir.exists():
         p4 = results_dir / "n02_benchmark" / "table4_f1_bands.csv"
         if p4.exists():
@@ -539,7 +522,7 @@ def generate_all_tables(
         "total_species": t4_data["total_species"],
     }]).to_csv(summary_path, index=False)
 
-    # 4. Generate Reconciliation Report
+    # Generate Reconciliation Report
     reconciliation_records = []
     for idx in range(1, 13):
         reconciliation_records.append({
@@ -555,4 +538,29 @@ def generate_all_tables(
     if results_dir.exists() and results_dir.resolve() != output_dir.resolve():
         _serialize_table(reconciliation_df, results_dir / "reconciliation_report", ("csv", "md"))
 
+    return tables, metadata
+
+
+def generate_all_tables(
+    output_dir: Path,
+    results_dir: Path = Path("results_reproduction"),
+    strict_empirical: bool = True,
+    formats: tuple[str, ...] = ("csv", "md", "tex"),
+    publication_config: Path | None = None,
+) -> dict[int, pd.DataFrame]:
+    """Generate tables; default strict mode requires an explicit admissible empirical selection.
+
+    ``strict_empirical=False`` explicitly opts in to the legacy historical generator.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if strict_empirical:
+        if publication_config is None:
+            raise RuntimeError(
+                "Publication generation requires an explicit admissible empirical artifact selection."
+            )
+        return generate_publication_tables(output_dir, publication_config, formats=formats)
+
+    tables, _ = generate_historical_snapshot_tables(output_dir, results_dir=results_dir, formats=formats)
     return tables

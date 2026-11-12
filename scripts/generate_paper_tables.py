@@ -52,10 +52,10 @@ def main() -> int:
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Generating publication tables in: {output_dir}")
+    print(f"Generating legacy publication tables in: {output_dir}")
 
-    tables = generate_all_tables(output_dir, formats=tuple(args.formats))
-    print(f"Successfully generated {len(tables)} tables in {args.formats} formats.")
+    tables = generate_all_tables(output_dir, formats=tuple(args.formats), strict_empirical=False)
+    print(f"Successfully generated {len(tables)} legacy tables in {args.formats} formats.")
     return 0
 
 
