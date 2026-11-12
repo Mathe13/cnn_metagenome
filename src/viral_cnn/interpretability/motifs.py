@@ -1,5 +1,6 @@
 """Interpretability, motif extraction, compositional controls, and triplet analysis."""
 
+import hashlib
 import math
 import os
 import re
@@ -255,6 +256,56 @@ def scan_motif_occurrences(
     return results
 
 
+def sample_substitution_offsets(
+    n_positions: int,
+    generator: Optional[torch.Generator] = None,
+    device: torch.device = torch.device("cpu"),
+) -> torch.Tensor:
+    """Samples a 1D tensor of substitution offsets delta in {1, 2, 3} for n_positions."""
+    return torch.randint(
+        1,
+        4,
+        (n_positions,),
+        device=device,
+        generator=generator,
+        dtype=torch.long,
+    )
+
+
+def perturb_region_with_offsets(
+    windows: torch.Tensor,
+    start: int,
+    offsets: torch.Tensor,
+) -> torch.Tensor:
+    """Applies substitution offsets (x + delta) % 4 to region [start, start + len(offsets)).
+
+    Positions with invalid or padding nucleotides (< 0 or >= 4) remain unchanged.
+    Positions outside [start, start + len(offsets)) remain strictly unchanged.
+    """
+    perturbed = windows.clone()
+    k = offsets.numel()
+    L = perturbed.shape[-1]
+    if start < 0 or start >= L or k == 0:
+        return perturbed
+
+    end = min(start + k, L)
+    region_len = end - start
+    sub_offsets = offsets[:region_len].to(perturbed.device)
+
+    subseq = perturbed[..., start:end]
+    valid_mask = (subseq >= 0) & (subseq < 4)
+
+    mutated = (subseq + sub_offsets) % 4
+    perturbed[..., start:end] = torch.where(valid_mask, mutated, subseq)
+    return perturbed
+
+
+def hash_mutation_offsets(offsets: torch.Tensor) -> str:
+    """Computes a deterministic 16-hex SHA-256 fingerprint for the mutation pattern."""
+    raw_bytes = offsets.detach().cpu().numpy().tobytes()
+    return hashlib.sha256(raw_bytes).hexdigest()[:16]
+
+
 def perturb_sequence_mask(
     windows: torch.Tensor,
     mask: torch.Tensor,
@@ -266,13 +317,10 @@ def perturb_sequence_mask(
 
     if valid.any():
         original = perturbed[valid]
-        offsets = torch.randint(
-            1,
-            4,
-            (original.numel(),),
-            device=windows.device,
+        offsets = sample_substitution_offsets(
+            original.numel(),
             generator=generator,
-            dtype=torch.long,
+            device=windows.device,
         )
         perturbed[valid] = (original + offsets) % 4
 
@@ -365,14 +413,24 @@ def sample_matched_control_region(
 
 def evaluate_motif_perturbation(
     model: nn.Module,
-    loader: torch.utils.data.DataLoader,
-    motifs: List[str],
-    model_name: str,
-    control_policy: Literal["uniform_random", "gc_matched", "complexity_matched"] = "uniform_random",
+    loader: Optional[torch.utils.data.DataLoader] = None,
+    motifs: Optional[List[str]] = None,
+    model_name: str = "cnn_model",
+    control_policy: str = "uniform_random",
     n_repeats: int = 5,
     seed: int = 42,
+    dataloader: Optional[torch.utils.data.DataLoader] = None,
 ) -> pd.DataFrame:
     """Evaluates probability drops from motif perturbation versus matched paired controls."""
+    if loader is None and dataloader is not None:
+        loader = dataloader
+    if loader is None:
+        raise ValueError("A DataLoader instance must be provided via `loader` or `dataloader`.")
+    if motifs is None:
+        motifs = []
+    if control_policy in ("uniform", "uniform_random"):
+        control_policy = "uniform_random"
+
     model.eval()
     actual_model = getattr(model, "_orig_mod", model)
     device = next(actual_model.parameters()).device
@@ -432,22 +490,20 @@ def evaluate_motif_perturbation(
 
                     m_start = int(rng.choice(seq_starts))
 
-                    motif_mask = torch.zeros_like(seq, dtype=torch.bool)
-                    motif_mask[m_start : m_start + K] = True
-
-                    ctrl_mask = torch.zeros_like(seq, dtype=torch.bool)
-                    ctrl_mask[ctrl_start : ctrl_start + K] = True
-
                     motif_drops_rep = []
                     ctrl_drops_rep = []
+                    hashes_rep = []
 
                     seq_batch = seq.unsqueeze(0)
                     lbl = labels[b : b + 1]
                     base_sc = baseline_scores[b].item()
 
                     for _ in range(n_repeats):
-                        m_pert = perturb_sequence_mask(seq_batch, motif_mask.unsqueeze(0), generator=generator)
-                        c_pert = perturb_sequence_mask(seq_batch, ctrl_mask.unsqueeze(0), generator=generator)
+                        offsets = sample_substitution_offsets(K, generator=generator, device=device)
+                        hashes_rep.append(hash_mutation_offsets(offsets))
+
+                        m_pert = perturb_region_with_offsets(seq_batch, start=m_start, offsets=offsets)
+                        c_pert = perturb_region_with_offsets(seq_batch, start=ctrl_start, offsets=offsets)
 
                         logits_m = actual_model(m_pert)
                         logits_c = actual_model(c_pert)
@@ -460,11 +516,18 @@ def evaluate_motif_perturbation(
 
                     mean_m_drop = float(np.mean(motif_drops_rep))
                     mean_c_drop = float(np.mean(ctrl_drops_rep))
+                    pattern_hash = (
+                        hashes_rep[0]
+                        if len(hashes_rep) == 1
+                        else hashlib.sha256(",".join(hashes_rep).encode("utf-8")).hexdigest()[:16]
+                    )
 
                     records.append({
                         "model_name": model_name,
                         "sequence_id": global_seq_id + b,
                         "motif": motif,
+                        "motif_start": m_start,
+                        "control_start": ctrl_start,
                         "n_occurrences": len(seq_starts),
                         "baseline_probability": base_sc,
                         "motif_probability_drop": mean_m_drop,
@@ -472,6 +535,7 @@ def evaluate_motif_perturbation(
                         "specific_probability_drop": mean_m_drop - mean_c_drop,
                         "control_policy": control_policy,
                         "n_repeats": n_repeats,
+                        "mutation_pattern_hash": pattern_hash,
                     })
 
             global_seq_id += B
