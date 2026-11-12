@@ -3,6 +3,7 @@
 from viral_cnn.interpretability.motifs import (
     extract_first_layer_motifs,
     scan_motif_occurrences,
+    MatchedControl,
     sample_matched_control_region,
     sample_substitution_offsets,
     perturb_region_with_offsets,
@@ -10,6 +11,7 @@ from viral_cnn.interpretability.motifs import (
     perturb_sequence_mask,
     evaluate_motif_perturbation,
     summarize_motif_control,
+    summarize_matched_control_coverage,
     audit_motif_composition_robustness,
     compute_jaccard_cooccurrence,
     analyze_cooccurrence_pairs,
@@ -21,6 +23,7 @@ from viral_cnn.interpretability.motifs import (
 __all__ = [
     "extract_first_layer_motifs",
     "scan_motif_occurrences",
+    "MatchedControl",
     "sample_matched_control_region",
     "sample_substitution_offsets",
     "perturb_region_with_offsets",
@@ -28,6 +31,7 @@ __all__ = [
     "perturb_sequence_mask",
     "evaluate_motif_perturbation",
     "summarize_motif_control",
+    "summarize_matched_control_coverage",
     "audit_motif_composition_robustness",
     "compute_jaccard_cooccurrence",
     "analyze_cooccurrence_pairs",

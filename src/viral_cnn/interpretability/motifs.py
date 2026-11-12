@@ -8,6 +8,7 @@ import struct
 import warnings
 import zlib
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -332,6 +333,82 @@ def _overlaps_any(start: int, starts: List[int], k: int) -> bool:
     return any(max(start, m) < min(start + k, m + k) for m in starts)
 
 
+@dataclass
+class MatchedControl:
+    """Structured representation of a matched control window with quality provenance."""
+    start: Optional[int]
+    policy: str
+    quality: Literal["exact", "relaxed_1", "unmatched_fallback", "unavailable"]
+    distance: int
+
+    @property
+    def is_available(self) -> bool:
+        return self.start is not None and self.quality != "unavailable"
+
+    def __bool__(self) -> bool:
+        return self.is_available
+
+    def __index__(self) -> int:
+        if self.start is None:
+            raise TypeError("Cannot use unavailable MatchedControl as an index")
+        return int(self.start)
+
+    def __int__(self) -> int:
+        if self.start is None:
+            raise TypeError("Cannot convert unavailable MatchedControl to int")
+        return int(self.start)
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            return self.start == other
+        if isinstance(other, MatchedControl):
+            return (self.start, self.policy, self.quality, self.distance) == (
+                other.start,
+                other.policy,
+                other.quality,
+                other.distance,
+            )
+        return False
+
+    def __lt__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            return self.start is not None and self.start < other
+        if isinstance(other, MatchedControl):
+            return self.start is not None and other.start is not None and self.start < other.start
+        return NotImplemented
+
+    def __le__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            return self.start is not None and self.start <= other
+        if isinstance(other, MatchedControl):
+            return self.start is not None and other.start is not None and self.start <= other.start
+        return NotImplemented
+
+    def __gt__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            return self.start is not None and self.start > other
+        if isinstance(other, MatchedControl):
+            return self.start is not None and other.start is not None and self.start > other.start
+        return NotImplemented
+
+    def __ge__(self, other: Any) -> bool:
+        if isinstance(other, int):
+            return self.start is not None and self.start >= other
+        if isinstance(other, MatchedControl):
+            return self.start is not None and other.start is not None and self.start >= other.start
+        return NotImplemented
+
+    def __add__(self, other: Any) -> Any:
+        if isinstance(other, int):
+            return self.start + other if self.start is not None else None
+        return NotImplemented
+
+    def __radd__(self, other: Any) -> Any:
+        if isinstance(other, int):
+            return other + self.start if self.start is not None else None
+        return NotImplemented
+
+
 def sample_matched_control_region(
     sequence: torch.Tensor,
     motif_starts: List[int],
@@ -339,15 +416,15 @@ def sample_matched_control_region(
     query_motif: str = "",
     control_policy: Literal["uniform_random", "gc_matched", "complexity_matched"] = "uniform_random",
     rng: Optional[np.random.Generator] = None,
-) -> Optional[int]:
-    """Sample a non-overlapping control window of length k from the same sequence."""
+) -> MatchedControl:
+    """Sample a non-overlapping control window of length k from the same sequence with quality metadata."""
     if rng is None:
         rng = np.random.default_rng(42)
 
     L = int(sequence.shape[0])
     max_start = L - k
     if max_start < 0:
-        return None
+        return MatchedControl(start=None, policy=control_policy, quality="unavailable", distance=-1)
 
     candidates = []
     for s in range(max_start + 1):
@@ -359,10 +436,11 @@ def sample_matched_control_region(
         candidates.append(s)
 
     if not candidates:
-        return None
+        return MatchedControl(start=None, policy=control_policy, quality="unavailable", distance=-1)
 
-    if control_policy == "uniform_random":
-        return int(rng.choice(candidates))
+    if control_policy in ("uniform", "uniform_random"):
+        sel = int(rng.choice(candidates))
+        return MatchedControl(start=sel, policy="uniform_random", quality="exact", distance=0)
 
     if control_policy == "gc_matched":
         target_gc = sum(1 for b in query_motif if b in ("C", "G"))
@@ -374,14 +452,16 @@ def sample_matched_control_region(
             diff = abs(seg_gc - target_gc)
             if diff == 0:
                 exact_matches.append(s)
-            elif diff <= 1:
+            elif diff == 1:
                 fallback_matches.append(s)
 
         if exact_matches:
-            return int(rng.choice(exact_matches))
+            sel = int(rng.choice(exact_matches))
+            return MatchedControl(start=sel, policy="gc_matched", quality="exact", distance=0)
         if fallback_matches:
-            return int(rng.choice(fallback_matches))
-        return None
+            sel = int(rng.choice(fallback_matches))
+            return MatchedControl(start=sel, policy="gc_matched", quality="relaxed_1", distance=1)
+        return MatchedControl(start=None, policy="gc_matched", quality="unavailable", distance=-1)
 
     if control_policy == "complexity_matched":
         max_run_query = 1
@@ -391,24 +471,42 @@ def sample_matched_control_region(
 
         matched_candidates = []
         fallback_candidates = []
+        unmatched_candidates = []
         for s in candidates:
             seg = sequence[s : s + k].cpu().numpy().tolist()
             seg_str = "".join(BASES[b] for b in seg)
             seg_runs = [len(m.group(0)) for m in re.finditer(r"(.)\1*", seg_str)]
             max_run_seg = max(seg_runs) if seg_runs else 1
 
-            if abs(max_run_seg - max_run_query) == 0:
+            diff = abs(max_run_seg - max_run_query)
+            if diff == 0:
                 matched_candidates.append(s)
-            elif abs(max_run_seg - max_run_query) <= 1:
+            elif diff == 1:
                 fallback_candidates.append(s)
+            else:
+                unmatched_candidates.append((diff, s))
 
         if matched_candidates:
-            return int(rng.choice(matched_candidates))
+            sel = int(rng.choice(matched_candidates))
+            return MatchedControl(start=sel, policy="complexity_matched", quality="exact", distance=0)
         if fallback_candidates:
-            return int(rng.choice(fallback_candidates))
-        return int(rng.choice(candidates))
+            sel = int(rng.choice(fallback_candidates))
+            return MatchedControl(start=sel, policy="complexity_matched", quality="relaxed_1", distance=1)
+        if unmatched_candidates:
+            unmatched_candidates.sort(key=lambda x: x[0])
+            best_diff = unmatched_candidates[0][0]
+            best_candidates = [s for d, s in unmatched_candidates if d == best_diff]
+            sel = int(rng.choice(best_candidates))
+            return MatchedControl(
+                start=sel,
+                policy="complexity_matched",
+                quality="unmatched_fallback",
+                distance=int(best_diff),
+            )
+        return MatchedControl(start=None, policy="complexity_matched", quality="unavailable", distance=-1)
 
-    return int(rng.choice(candidates))
+    sel = int(rng.choice(candidates))
+    return MatchedControl(start=sel, policy=control_policy, quality="exact", distance=0)
 
 
 def evaluate_motif_perturbation(
@@ -420,6 +518,7 @@ def evaluate_motif_perturbation(
     n_repeats: int = 5,
     seed: int = 42,
     dataloader: Optional[torch.utils.data.DataLoader] = None,
+    strict_matching: bool = False,
 ) -> pd.DataFrame:
     """Evaluates probability drops from motif perturbation versus matched paired controls."""
     if loader is None and dataloader is not None:
@@ -477,7 +576,7 @@ def evaluate_motif_perturbation(
                         continue
 
                     seq = inputs[b]
-                    ctrl_start = sample_matched_control_region(
+                    ctrl = sample_matched_control_region(
                         sequence=seq,
                         motif_starts=seq_starts,
                         k=K,
@@ -485,9 +584,13 @@ def evaluate_motif_perturbation(
                         control_policy=control_policy,
                         rng=rng,
                     )
-                    if ctrl_start is None:
+                    if ctrl is None or not ctrl.is_available:
                         continue
 
+                    if strict_matching and ctrl.quality != "exact":
+                        continue
+
+                    ctrl_start = ctrl.start
                     m_start = int(rng.choice(seq_starts))
 
                     motif_drops_rep = []
@@ -534,6 +637,9 @@ def evaluate_motif_perturbation(
                         "random_probability_drop": mean_c_drop,
                         "specific_probability_drop": mean_m_drop - mean_c_drop,
                         "control_policy": control_policy,
+                        "control_policy_requested": control_policy,
+                        "control_match_quality": ctrl.quality,
+                        "control_match_distance": ctrl.distance,
                         "n_repeats": n_repeats,
                         "mutation_pattern_hash": pattern_hash,
                     })
@@ -594,6 +700,39 @@ def summarize_motif_control(
         )
         summary.loc[valid, "p_fdr"] = p_adj
         summary.loc[valid, "significant_fdr"] = reject
+
+    return summary
+
+
+def summarize_matched_control_coverage(df: pd.DataFrame) -> pd.DataFrame:
+    """Computes matching quality coverage statistics (exact, relaxed, unmatched, unavailable)."""
+    if df.empty or "control_match_quality" not in df.columns:
+        return pd.DataFrame(columns=[
+            "model_name", "motif", "n_requested", "n_exact", "n_relaxed", "n_unmatched", "n_unavailable", "exact_match_rate"
+        ])
+
+    group_cols = [c for c in ["model_name", "motif"] if c in df.columns]
+
+    def _agg(sub: pd.DataFrame) -> pd.Series:
+        n_req = len(sub)
+        n_exact = int((sub["control_match_quality"] == "exact").sum())
+        n_relaxed = int(sub["control_match_quality"].astype(str).str.startswith("relaxed").sum())
+        n_unmatched = int((sub["control_match_quality"] == "unmatched_fallback").sum())
+        n_unavail = int((sub["control_match_quality"] == "unavailable").sum())
+        rate = float(n_exact / n_req) if n_req > 0 else 0.0
+        return pd.Series({
+            "n_requested": n_req,
+            "n_exact": n_exact,
+            "n_relaxed": n_relaxed,
+            "n_unmatched": n_unmatched,
+            "n_unavailable": n_unavail,
+            "exact_match_rate": rate,
+        })
+
+    if group_cols:
+        summary = df.groupby(group_cols, observed=True).apply(_agg, include_groups=False).reset_index()
+    else:
+        summary = pd.DataFrame([_agg(df)])
 
     return summary
 
