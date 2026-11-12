@@ -79,11 +79,62 @@ def _to_numpy_probs_and_labels(
     return p_np, y_np
 
 
+def _validate_and_filter_labels(
+    p_np: np.ndarray,
+    y_np: np.ndarray,
+    invalid_label_policy: Literal["raise", "exclude"] = "raise",
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Validates and optionally filters ground-truth labels against closed-set class bounds [0, n_classes).
+
+    Parameters
+    ----------
+    p_np : np.ndarray of shape (N, C)
+        Predicted probabilities.
+    y_np : np.ndarray of shape (N,)
+        Ground-truth integer labels.
+    invalid_label_policy : "raise" | "exclude", default "raise"
+        - "raise": fails fast with ValueError if any label < 0 or >= C, detailing the invalid count,
+          C, and sample invalid label values.
+        - "exclude": filters out samples with invalid labels. If no valid samples remain,
+          raises ValueError("All samples were excluded due to invalid labels.").
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        Validated and potentially filtered (p_np, y_np).
+    """
+    if invalid_label_policy not in ("raise", "exclude"):
+        raise ValueError(
+            f"Invalid invalid_label_policy '{invalid_label_policy}'. Must be 'raise' or 'exclude'."
+        )
+
+    n_samples, n_classes = p_np.shape
+    invalid_mask = (y_np < 0) | (y_np >= n_classes)
+    n_invalid = int(np.sum(invalid_mask))
+
+    if n_invalid > 0:
+        if invalid_label_policy == "raise":
+            sample_invalids = y_np[invalid_mask][:5].tolist()
+            raise ValueError(
+                f"Found {n_invalid} invalid labels outside [0, {n_classes}). Examples: {sample_invalids}."
+            )
+        elif invalid_label_policy == "exclude":
+            valid_mask = ~invalid_mask
+            p_np = p_np[valid_mask]
+            y_np = y_np[valid_mask]
+            if len(y_np) == 0:
+                raise ValueError("All samples were excluded due to invalid labels.")
+
+    return p_np, y_np
+
+
 def compute_reliability_diagram(
     probs: Union[np.ndarray, torch.Tensor],
     y_true: Union[np.ndarray, torch.Tensor, List[int]],
     n_bins: int = 15,
     binning_strategy: Literal["equal_width", "equal_mass"] = "equal_width",
+    invalid_label_policy: Literal["raise", "exclude"] = "raise",
 ) -> List[ReliabilityDiagramBin]:
     """
     Partitions Top-1 predictions into declared confidence bins and computes
@@ -91,6 +142,9 @@ def compute_reliability_diagram(
     Guarantees sample conservation: sum(count) strictly equals N.
     """
     p_np, y_np = _to_numpy_probs_and_labels(probs, y_true)
+    p_np, y_np = _validate_and_filter_labels(
+        p_np, y_np, invalid_label_policy=invalid_label_policy
+    )
     n_samples = len(y_np)
 
     top1_preds = np.argmax(p_np, axis=1)
@@ -163,6 +217,7 @@ def compute_calibration_metrics(
     n_bins: int = 15,
     binning_strategy: Literal["equal_width", "equal_mass"] = "equal_width",
     eps: float = 1e-15,
+    invalid_label_policy: Literal["raise", "exclude"] = "raise",
 ) -> CalibrationMetrics:
     """
     Computes formal probabilistic calibration metrics:
@@ -175,6 +230,9 @@ def compute_calibration_metrics(
       - Overconfidence gap and regime indicator
     """
     p_np, y_np = _to_numpy_probs_and_labels(probs, y_true)
+    p_np, y_np = _validate_and_filter_labels(
+        p_np, y_np, invalid_label_policy=invalid_label_policy
+    )
     n_samples, n_classes = p_np.shape
 
     top1_preds = np.argmax(p_np, axis=1)
@@ -199,6 +257,7 @@ def compute_calibration_metrics(
         y_true=y_np,
         n_bins=n_bins,
         binning_strategy=binning_strategy,
+        invalid_label_policy=invalid_label_policy,
     )
 
     ece = 0.0
@@ -212,10 +271,7 @@ def compute_calibration_metrics(
         sum_weights += (b.count / n_samples)
 
     # Multiclass Negative Log-Likelihood (NLL) with epsilon clamping
-    valid_target_mask = (y_np >= 0) & (y_np < n_classes)
-    p_true = np.zeros(n_samples, dtype=np.float64)
-    if np.any(valid_target_mask):
-        p_true[valid_target_mask] = p_np[np.arange(n_samples)[valid_target_mask], y_np[valid_target_mask]]
+    p_true = p_np[np.arange(n_samples), y_np]
     p_true_clamped = np.clip(p_true, eps, 1.0)
     nll = float(-np.mean(np.log(p_true_clamped)))
 
