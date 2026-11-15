@@ -61,5 +61,5 @@
 **In progress**: Transição para C07 (Reexecução empírica, curadoria e pacote final).
 **Next step**: Preparação e execução do pacote C07 conforme `PLANO_CORRECOES_CNN_METAGENOME_AGENTS_2026-11-15.md`.
 **Blockers**: C07 requer ambiente operacional com dados e checkpoints reais no cluster/JupyterHub para reexecução empírica completa.
-**Uncommitted**: `.specs/features/c01-inventario-contratos-dados/`, `.specs/features/c02-manifestos-derivados-e-suporte/`, `.specs/features/c03-adaptadores-tabelas-e-figuras-basicas/`, `.specs/features/c04-decisao-cientifica-t11/`, `.specs/features/c05-figuras-f3-f5-selecao-legibilidade/`, `.specs/features/c06-integracao-realista-selecao-c06/`, `docs/publication_data_contracts.md`, `tests/test_c01_data_contracts.py`, `tests/test_c02_derived_manifests.py`, `tests/test_c03_publication_adapters.py`, `tests/test_c04_t11_scientific_decision.py`, `tests/test_c05_figure_readiness.py`, `tests/test_c06_realistic_integration.py`, `configs/reproduction_m07.yaml`, `scripts/build_candidate_publication_config.py`, `src/viral_cnn/`.
+**Uncommitted**: None (working tree clean, 3 commits ahead of origin: `7ab120b`, `5fe9656`, `4897318`).
 **Branch**: main
