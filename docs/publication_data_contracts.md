@@ -48,6 +48,8 @@ Esta matriz formaliza os contratos executáveis de entrada e saída para todas a
    - Os CSVs de projeção gerados por `src/viral_cnn/paired_umap.py` contêm comentários de cabeçalho (`# QUALITATIVE ONLY...`).
    - Todos os leitores e validadores devem processar esses arquivos com suporte a `comment='#'`, preservando a declaração qualitativa no arquivo sem quebrar a tipagem de `umap_1` e `umap_2`.
 
-4. **Escopo e Significado Científico de T11:**
-   - T11 descreve a análise empírica de coocorrência e orientação de motivos avaliada em `short/08`, acompanhada de seu respectivo teste de permutação nula de nós (`p_permutation_null`).
-   - O contrato exige a presença obrigatória das colunas `status`, `n_valid_edges`, `n_valid_permutations`, `r_canonical`, `r_reversed`, `delta_r_orientation`, `icc_symmetric`, `r_bidirectional`, e `p_permutation_null`.
+4. **Escopo e Decisão Metodológica de T11 (Decisão C04):**
+   - T11 descreve formalmente a análise empírica de coocorrência e similaridade composicional de pares de 7-mers calculada em `short/08` (`table_11_cooccurrence_synergy.csv`), controlada por modelo nulo de permutação de nós do grafo ($N_{\text{perm}} \ge 100$, semente 42).
+   - Rejeita-se categoricamente a interpretação histórica de correlação entre arquiteturas baseada em sequências compartilhadas ou matrizes de variância nula, que geravam coeficientes espúrios $r=1.0$ ($p=0.0$).
+   - O contrato exige a presença obrigatória das colunas `status`, `motif_score`, `n_valid_edges`, `n_valid_permutations`, `r_canonical`, `r_reversed`, `delta_r_orientation`, `icc_symmetric`, `r_bidirectional`, e `p_permutation_null`.
+   - Diagnósticos exploratórios de Jaccard entre variantes (`table_11b_jaccard_variant_diagnostics.csv`) permanecem estritamente descritivos e separados da evidência inferencial de publicação.
