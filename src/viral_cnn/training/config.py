@@ -5,7 +5,7 @@ Configuration and parameter parity enforcement for controlled architecture exper
 from dataclasses import dataclass, field
 from pathlib import Path
 import random
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 import torch
@@ -13,6 +13,8 @@ import yaml
 
 SUPPORTED_ARCHITECTURES = ("resnet50_1d", "convnext_tiny_1d")
 VALID_CHECKPOINT_METRICS = ("best_val_loss", "best_val_macro_f1", "last_step")
+VALID_SCHEDULER_MODES = ("internal_step", "external_batch", "external_epoch", "constant")
+SchedulerMode = Literal["internal_step", "external_batch", "external_epoch", "constant"]
 
 
 def seed_everything(seed: int) -> None:
@@ -54,6 +56,7 @@ class ControlledExperimentConfig:
     freeze_layers: Sequence[str] = ()
     mode: Literal["historical_reproduction", "controlled_parity"] = "controlled_parity"
     scheduler_step_unit: Literal["epoch", "batch"] = "epoch"
+    scheduler_mode: Optional[SchedulerMode] = None
 
     def __post_init__(self):
         # Normalize sequences to tuples
@@ -67,6 +70,31 @@ class ControlledExperimentConfig:
 
         if self.scheduler_step_unit not in ("epoch", "batch"):
             raise ValueError(f"Unsupported scheduler_step_unit '{self.scheduler_step_unit}'. Expected 'epoch' or 'batch'")
+
+        # Scheduler ownership resolution and validation
+        if self.scheduler_mode is None:
+            if self.mode == "historical_reproduction":
+                # Historical reproduction defers scheduler mode to allow fine-tuning scripts
+                self.scheduler_mode = None
+            elif self.warmup_steps > 0:
+                self.scheduler_mode = "internal_step"
+            else:
+                self.scheduler_mode = "constant"
+        else:
+            if self.scheduler_mode not in VALID_SCHEDULER_MODES:
+                raise ValueError(
+                    f"Unsupported scheduler_mode '{self.scheduler_mode}'. "
+                    f"Supported modes: {VALID_SCHEDULER_MODES}"
+                )
+            if (
+                self.warmup_steps > 0
+                and self.scheduler_mode == "constant"
+                and self.mode == "controlled_parity"
+            ):
+                raise ValueError(
+                    f"warmup_steps ({self.warmup_steps}) > 0 requires a scheduling owner "
+                    f"(internal_step, external_batch, or external_epoch), got scheduler_mode='constant'"
+                )
 
         # Validate architectures
         for arch in self.architectures:
@@ -146,4 +174,5 @@ def load_controlled_config(config_path: str | Path) -> ControlledExperimentConfi
         ),
         mode=params.get("mode", "historical_reproduction"),
         scheduler_step_unit=params.get("scheduler_step_unit", "epoch"),
+        scheduler_mode=params.get("scheduler_mode", None),
     )

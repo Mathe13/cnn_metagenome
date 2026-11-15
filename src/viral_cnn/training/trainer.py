@@ -57,13 +57,22 @@ class ControlledTrainer:
                     if any(name.startswith(prefix) for prefix in self.freeze_layers):
                         self._frozen_bn_modules.append(module)
 
+        # Scheduler ownership resolution
+        self.scheduler_mode = getattr(self.config, "scheduler_mode", None)
+        if self.scheduler_mode is None:
+            is_historical = (
+                getattr(self.config, "mode", None) == "historical_reproduction"
+                or getattr(self.config, "warmup_steps", 0) == 0
+            )
+            self.scheduler_mode = None if getattr(self.config, "mode", None) == "historical_reproduction" else ("constant" if is_historical else "internal_step")
+
         # Optimizer: AdamW on trainable parameters
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        is_historical = (
-            getattr(self.config, "mode", None) == "historical_reproduction"
-            or getattr(self.config, "warmup_steps", 0) == 0
+        initial_lr = (
+            self._compute_scheduled_lr(0)
+            if self.scheduler_mode == "internal_step"
+            else float(self.config.learning_rate)
         )
-        initial_lr = float(self.config.learning_rate) if is_historical else self._compute_scheduled_lr(0)
         self.optimizer = torch.optim.AdamW(
             trainable_params if trainable_params else self.model.parameters(),
             lr=initial_lr,
@@ -127,10 +136,13 @@ class ControlledTrainer:
         batch_x = batch_x.to(self.device)
         batch_y = batch_y.to(self.device)
 
-        # Update learning rate per schedule
-        lr = self._compute_scheduled_lr(self.current_step)
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
+        # Update learning rate per schedule ownership
+        if self.scheduler_mode == "internal_step":
+            lr = self._compute_scheduled_lr(self.current_step)
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = lr
+        else:
+            lr = self.get_current_lr()
 
         self.optimizer.zero_grad(set_to_none=True)
 
@@ -187,7 +199,24 @@ class ControlledTrainer:
         self.model.train()
         self._apply_bn_eval()
 
-        step_unit = scheduler_step_unit or getattr(self.config, "scheduler_step_unit", "epoch")
+        # Validate scheduler ownership
+        if self.scheduler_mode in ("internal_step", "constant") and scheduler is not None:
+            raise ValueError(
+                f"Conflicting schedulers: scheduler_mode is '{self.scheduler_mode}' "
+                f"but an external scheduler was provided to train_epoch."
+            )
+        if self.scheduler_mode in ("external_batch", "external_epoch") and scheduler is None:
+            raise ValueError(
+                f"Missing external scheduler: scheduler_mode is '{self.scheduler_mode}' "
+                f"but no external scheduler was provided to train_epoch."
+            )
+
+        if self.scheduler_mode == "external_batch":
+            step_unit = "batch"
+        elif self.scheduler_mode == "external_epoch":
+            step_unit = "epoch"
+        else:
+            step_unit = scheduler_step_unit or getattr(self.config, "scheduler_step_unit", "epoch")
         has_stepped_optimizer = False
         epoch_lr = self.get_current_lr()
 
