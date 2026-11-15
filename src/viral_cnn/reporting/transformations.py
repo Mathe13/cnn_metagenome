@@ -269,6 +269,12 @@ def emit_derived_manifest(
             selection["filters"] = ["none"]
         manifest_data["selection"] = selection
 
+    for field in ("panels", "panel_variants"):
+        if field in parent_manifest:
+            manifest_data[field] = parent_manifest[field]
+        elif extra_metadata and field in extra_metadata:
+            manifest_data[field] = extra_metadata[field]
+
     if extra_metadata:
         manifest_data.update(extra_metadata)
 
@@ -294,6 +300,12 @@ def transform_table_1_metrics(df: pd.DataFrame, meta: dict[str, Any]) -> pd.Data
         df["accuracy"] = df["top1_accuracy"]
     if "top5_accuracy" in df.columns and "top_5" not in df.columns:
         df["top_5"] = df["top5_accuracy"]
+    if "backbone_params_m" in df.columns and "backbone_m" not in df.columns:
+        df["backbone_m"] = df["backbone_params_m"]
+    if "head_params_m" in df.columns and "fc_params_m" not in df.columns:
+        df["fc_params_m"] = df["head_params_m"]
+    if "total_params_m" in df.columns and "parameters_m" not in df.columns:
+        df["parameters_m"] = df["total_params_m"]
 
     required = {"model", "taxonomic_level", "accuracy", "top_5", "macro_f1"}
     missing = required - set(df.columns)
@@ -341,6 +353,12 @@ def transform_table_2_profiling(df: pd.DataFrame, meta: dict[str, Any]) -> pd.Da
         df["fc_params_m"] = (df["head_params"] / 1e6).round(2)
     if "total_params" in df.columns and "parameters_m" not in df.columns:
         df["parameters_m"] = (df["total_params"] / 1e6).round(2)
+    if "backbone_params_m" in df.columns and "backbone_m" not in df.columns:
+        df["backbone_m"] = df["backbone_params_m"]
+    if "head_params_m" in df.columns and "fc_params_m" not in df.columns:
+        df["fc_params_m"] = df["head_params_m"]
+    if "total_params_m" in df.columns and "parameters_m" not in df.columns:
+        df["parameters_m"] = df["total_params_m"]
     if "throughput_seq_sec" in df.columns and "throughput_seq_s" not in df.columns:
         df["throughput_seq_s"] = df["throughput_seq_sec"]
     if "avg_latency_ms" in df.columns and "step_time_ms" not in df.columns:
@@ -364,6 +382,15 @@ def transform_table_2_profiling(df: pd.DataFrame, meta: dict[str, Any]) -> pd.Da
         raise PublicationValidationError(
             f"T2 input contains null measurements in columns {null_cols}. Null values are forbidden."
         )
+
+    # Rejection of zero-filled measurements
+    for m_col in ("peak_vram_mb", "step_time_ms", "throughput_seq_s"):
+        if m_col in df.columns:
+            m_vals = pd.to_numeric(df[m_col], errors="coerce")
+            if (m_vals <= 0.0).any():
+                raise PublicationValidationError(
+                    f"T2 measurement {m_col} contains zero or negative values. Zero-fill detected; empirical measurements required."
+                )
     return df[cols].copy()
 
 
@@ -468,33 +495,52 @@ def transform_table_10_triplet_composition(df: pd.DataFrame, meta: dict[str, Any
 
 @register_transformation("T11")
 def transform_table_11_architecture_correlations(df: pd.DataFrame, meta: dict[str, Any]) -> pd.DataFrame:
-    """Table 11: motif overlap and permutation null analysis between architectures / co-occurrence synergy.
+    """Table 11: motif pair co-occurrence and directional synergy with node-permutation null test.
 
-    Rejects cooccurrence data claiming architecture correlation without permutation null test!
+    Scientific Contract:
+    - Represents 7-mer motif co-occurrence synergy evaluated against a node-permutation null distribution.
+    - Prohibits spurious r=1 correlations originating from identical or zero-variance matrices.
+    - Strictly requires permutation null testing evidence (p_permutation_null with N_perm >= 100).
     """
     df = df.copy()
 
-    # Check that it's not a degenerated identical matrix claiming r=1 without variance
-    if "correlation_r" in df.columns and "p_value" in df.columns:
-        if (df["correlation_r"] == 1.0).all() and (df["p_value"] == 0.0).all():
-            if "has_variance" in df.columns and not df["has_variance"].all():
-                raise PublicationValidationError(
-                    "T11 scientific contract violation: spurious r=1 correlation from identical or zero-variance matrices."
-                )
+    # Map p_perm -> p_permutation_null if present
+    if "p_perm" in df.columns and "p_permutation_null" not in df.columns:
+        df["p_permutation_null"] = df["p_perm"]
 
+    # Check that it's not a degenerated identical matrix claiming r=1 without variance
+    for r_col in ("correlation_r", "r_bidirectional", "r_canonical"):
+        if r_col in df.columns:
+            r_vals = pd.to_numeric(df[r_col], errors="coerce")
+            if (r_vals == 1.0).all():
+                if "has_variance" in df.columns and not df["has_variance"].all():
+                    raise PublicationValidationError(
+                        "T11 scientific contract violation: spurious r=1 correlation from identical or zero-variance matrices."
+                    )
+                if "p_value" in df.columns and (df["p_value"] == 0.0).all() and "has_variance" in df.columns and not df["has_variance"].all():
+                    raise PublicationValidationError(
+                        "T11 scientific contract violation: spurious r=1 correlation from identical or zero-variance matrices."
+                    )
+
+    # Permutation test presence and validity checks
     if "is_permutation_tested" in df.columns:
         if not df["is_permutation_tested"].all():
             raise PublicationValidationError(
                 "T11 scientific contract violation: co-occurrence matrices without permutation null "
                 "testing cannot be published as architecture correlation."
             )
-    elif "p_permutation_null" in df.columns:
-        # Verified permutation null test from short/08
-        pass
-    else:
+    elif "p_permutation_null" not in df.columns:
         raise PublicationValidationError(
             "T11 scientific contract violation: permutation null testing evidence missing."
         )
+
+    # Validate permutation count
+    if "n_valid_permutations" in df.columns:
+        perm_counts = pd.to_numeric(df["n_valid_permutations"], errors="coerce")
+        if (perm_counts < 100).any():
+            raise PublicationValidationError(
+                f"T11 scientific contract violation: insufficient valid permutations ({perm_counts.tolist()} < 100)."
+            )
 
     return df
 
@@ -556,6 +602,8 @@ def transform_figure_1_noise_robustness(df: pd.DataFrame, meta: dict[str, Any]) 
     df = df.copy()
     if "noise_rate" in df.columns and "epsilon" not in df.columns:
         df["epsilon"] = df["noise_rate"]
+    if "unconditional_accuracy" in df.columns and "accuracy" not in df.columns:
+        df["accuracy"] = df["unconditional_accuracy"]
     required = {"epsilon", "accuracy"}
     if not required.issubset(df.columns):
         raise PublicationValidationError(f"F1 input missing required columns: {required - set(df.columns)}")

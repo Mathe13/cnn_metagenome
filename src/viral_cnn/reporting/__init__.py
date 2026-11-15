@@ -16,6 +16,7 @@ from viral_cnn.reporting.tables import (
 from viral_cnn.reporting.figures import (
     generate_all_figures,
     verify_latex_figure_paths,
+    verify_figure_publication_readiness,
 )
 from viral_cnn.reporting.manuscript import (
     build_manuscript_variants,
@@ -26,6 +27,7 @@ from viral_cnn.reporting.publication import (
     validate_artifact_provenance,
     validate_selection,
     assemble_publication,
+    build_candidate_publication_config,
 )
 
 __all__ = [
@@ -42,11 +44,13 @@ __all__ = [
     "generate_table_12_voter_consensus",
     "generate_all_figures",
     "verify_latex_figure_paths",
+    "verify_figure_publication_readiness",
     "build_manuscript_variants",
     "compile_manuscript",
     "generate_manuscript_content",
     "validate_artifact_provenance",
     "validate_selection",
     "assemble_publication",
+    "build_candidate_publication_config",
 ]
 

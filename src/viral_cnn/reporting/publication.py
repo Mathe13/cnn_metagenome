@@ -1239,20 +1239,21 @@ def diagnose_publication_readiness(
 
         # Schema check for tables
         if iid.startswith("T"):
-            expected_columns = expected.get("columns", [])
-            if expected_columns and not set(expected_columns).issubset(table_frame.columns):
-                missing_cols = list(set(expected_columns) - set(table_frame.columns))
-                results.append({
-                    "item_id": iid,
-                    "status": "SCHEMA_MISMATCH",
-                    "diagnostic": f"Missing expected table columns: {missing_cols}",
-                    "proposed_source": proposed,
-                    "recommendation": f"Add missing columns {missing_cols} via registered transformation",
-                })
-                continue
-
             # Scientific contract for T11
             if iid == "T11":
+                has_perm = (
+                    "p_permutation_null" in table_frame.columns
+                    or ("is_permutation_tested" in table_frame.columns and bool(table_frame["is_permutation_tested"].all()))
+                )
+                if not has_perm:
+                    results.append({
+                        "item_id": iid,
+                        "status": "SCIENTIFIC_MISMATCH",
+                        "diagnostic": "T11 co-occurrence matrix without permutation null test cannot claim architecture correlation",
+                        "proposed_source": proposed,
+                        "recommendation": "Apply permutation null test across nodes and report empirical p-values",
+                    })
+                    continue
                 if "is_permutation_tested" in table_frame.columns and not table_frame["is_permutation_tested"].all():
                     results.append({
                         "item_id": iid,
@@ -1272,6 +1273,18 @@ def diagnose_publication_readiness(
                             "recommendation": "Evaluate independent model representations with verified variance",
                         })
                         continue
+
+            expected_columns = expected.get("columns", [])
+            if expected_columns and not set(expected_columns).issubset(table_frame.columns):
+                missing_cols = list(set(expected_columns) - set(table_frame.columns))
+                results.append({
+                    "item_id": iid,
+                    "status": "SCHEMA_MISMATCH",
+                    "diagnostic": f"Missing expected table columns: {missing_cols}",
+                    "proposed_source": proposed,
+                    "recommendation": f"Add missing columns {missing_cols} via registered transformation",
+                })
+                continue
 
         # Schema & scientific checks for figures
         if iid.startswith("F"):
@@ -1416,3 +1429,177 @@ def assemble_publication(
     )
     return {"status": status, "rows": rows, "matrix": matrix_path, "manifest": manifest_path,
             "outputs": outputs, "gates": gates, "compilation": compile_results, "diagnostics": diag_df}
+
+
+STAGE_ITEM_CANDIDATE_FILENAMES: dict[str, tuple[str, list[str]]] = {
+    "T1": ("short/01", ["table1_metrics.csv", "benchmark_clean_noise_summary.csv", "evaluation_results.csv"]),
+    "T2": ("short/01", ["table2_profiling.csv"]),
+    "T3": ("short/09", ["table3_noise_degradation.csv", "benchmark_metrics_stratified.csv"]),
+    "T4": ("short/01", ["table4_f1_bands.csv", "table4_species_f1_distribution.csv"]),
+    "T5": ("short/06", ["table5_latent_clustering_metrics.csv"]),
+    "T6": ("short/06", ["table6_taxonomic_rank_correlations.csv", "table6_taxonomic_consistency.csv"]),
+    "T7": ("short/02", ["table7_hierarchical_entropy.csv", "table7_rank_evaluation.csv"]),
+    "T8": ("short/07", ["table8_motif_activations.csv", "motif_perturbation_by_variant.csv"]),
+    "T9": ("short/08", ["table_09_exploratory_rscu.csv", "table9_triplet_composition.csv"]),
+    "T10": ("short/08", ["table_10_translation_boundary_signals.csv", "table10_start_stop_signals.csv"]),
+    "T11": ("short/08", ["table11_cooccurrence_synergy.csv"]),
+    "T12": ("long/03", ["table_12_long_voter_comparison.csv", "table12_long_sequence_consensus.csv"]),
+    "F1": ("short/09", ["fig1_noise_robustness.csv", "benchmark_metrics_stratified.csv"]),
+    "F2": ("short/06b", ["fig2_umap_projection.csv", "umap_projection_convnext_f.csv", "paired_umap_projections.csv"]),
+    "F3": ("short/07", ["fig3_motif_perturbation.csv", "motif_perturbation_by_variant.csv"]),
+    "F4": ("short/08", ["fig4_rscu_profile.csv", "table_09_exploratory_rscu.csv"]),
+    "F5": ("short/08", ["edge_table.csv"]),
+}
+
+
+def build_candidate_publication_config(
+    run_plan_path: str | Path,
+    base_config_path: str | Path,
+    output_path: str | Path | None = None,
+    project_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Propose candidate C06 publication configuration from an explicit M00 run_plan.json.
+
+    Maps reproduction run stage directories to publication items (T1–T12, F1–F5),
+    computes SHA-256 hashes of discovered artifacts and manifests, and produces a
+    structured diff report contrasting current configuration vs candidate proposals.
+
+    Does not automatically certify scientific reproduction; requires human review.
+    """
+    run_plan_file = Path(run_plan_path).resolve()
+    if not run_plan_file.is_file():
+        raise PublicationValidationError(f"run_plan.json missing: {run_plan_file}")
+
+    base_config_file = Path(base_config_path).resolve()
+    if not base_config_file.is_file():
+        raise PublicationValidationError(f"base publication config missing: {base_config_file}")
+
+    log_artifact_path("Candidate config source run plan", run_plan_file)
+    log_artifact_path("Candidate config base config", base_config_file)
+
+    plan = json.loads(run_plan_file.read_text(encoding="utf-8"))
+    base_config = yaml.safe_load(base_config_file.read_text(encoding="utf-8"))
+    root = Path(project_root or base_config.get("_project_root") or Path.cwd()).resolve()
+
+    run_id = plan.get("parent_run_id") or plan.get("run_id") or "unknown_run"
+    stage_dir_map: dict[str, Path] = {}
+    for stage in plan.get("stages", []):
+        if "notebook_id" in stage and "output_dir" in stage:
+            stage_dir_map[stage["notebook_id"]] = Path(stage["output_dir"])
+
+    candidate_config = yaml.safe_load(yaml.safe_dump(base_config))
+    candidate_config["run_id"] = run_id
+
+    diff_report: list[dict[str, Any]] = []
+
+    for item in candidate_config.get("items", []):
+        item_id = item.get("item_id")
+        current_artifact = item.get("artifact", "")
+        current_sha256 = item.get("sha256", "")
+        proposed_source = item.get("proposed_source", "")
+
+        candidate_artifact_path: Path | None = None
+        candidate_manifest_path: Path | None = None
+
+        # 1. Check mapped stage output
+        if item_id in STAGE_ITEM_CANDIDATE_FILENAMES:
+            stage_id, filenames = STAGE_ITEM_CANDIDATE_FILENAMES[item_id]
+            stage_dir = stage_dir_map.get(stage_id)
+            if stage_dir and stage_dir.is_dir():
+                for fname in filenames:
+                    p = stage_dir / fname
+                    if p.is_file():
+                        candidate_artifact_path = p
+                        break
+
+        # 2. Check proposed_source with <run_id> replacement
+        if not candidate_artifact_path and proposed_source:
+            resolved_proposed = proposed_source.replace("<run_id>", run_id)
+            candidate_p = root / resolved_proposed
+            if candidate_p.is_file():
+                candidate_artifact_path = candidate_p
+            elif candidate_p.is_dir():
+                # search for known candidate files in this dir
+                if item_id in STAGE_ITEM_CANDIDATE_FILENAMES:
+                    for fname in STAGE_ITEM_CANDIDATE_FILENAMES[item_id][1]:
+                        sub_p = candidate_p / fname
+                        if sub_p.is_file():
+                            candidate_artifact_path = sub_p
+                            break
+
+        if candidate_artifact_path and candidate_artifact_path.is_file():
+            artifact_hash = sha256_file(candidate_artifact_path)
+            item["artifact"] = str(candidate_artifact_path)
+            item["sha256"] = artifact_hash
+
+            # Look for manifest
+            manifest_candidates = [
+                candidate_artifact_path.with_name(f"{candidate_artifact_path.name}.manifest.json"),
+                candidate_artifact_path.with_name(f"{candidate_artifact_path.stem}.manifest.json"),
+                candidate_artifact_path.parent / "manifest.json",
+            ]
+            for m_cand in manifest_candidates:
+                if m_cand.is_file():
+                    candidate_manifest_path = m_cand
+                    item["manifest"] = str(m_cand)
+                    try:
+                        m_data = json.loads(m_cand.read_text(encoding="utf-8"))
+                        if "protocol" in m_data and not item.get("protocol"):
+                            item["protocol"] = m_data["protocol"]
+                        if "scientific_identity" in m_data and "expected" in item:
+                            item["expected"]["scientific_identity"] = m_data["scientific_identity"]
+                    except Exception:
+                        pass
+                    break
+
+            status = "UNCHANGED" if (current_artifact == str(candidate_artifact_path) and current_sha256 == artifact_hash) else "PROPOSED"
+            diff_report.append({
+                "item_id": item_id,
+                "status": status,
+                "current_artifact": current_artifact,
+                "candidate_artifact": str(candidate_artifact_path),
+                "current_sha256": current_sha256,
+                "candidate_sha256": artifact_hash,
+                "manifest": str(candidate_manifest_path) if candidate_manifest_path else None,
+            })
+        else:
+            diff_report.append({
+                "item_id": item_id,
+                "status": "MISSING",
+                "current_artifact": current_artifact,
+                "candidate_artifact": None,
+                "current_sha256": current_sha256,
+                "candidate_sha256": None,
+                "manifest": None,
+            })
+
+    missing_count = sum(1 for d in diff_report if d["status"] == "MISSING")
+    proposed_count = sum(1 for d in diff_report if d["status"] == "PROPOSED")
+    unchanged_count = sum(1 for d in diff_report if d["status"] == "UNCHANGED")
+
+    overall_status = "READY" if missing_count == 0 else "INCOMPLETE"
+
+    result = {
+        "status": overall_status,
+        "run_id": run_id,
+        "candidate_config": candidate_config,
+        "diff": diff_report,
+        "counts": {
+            "total": len(diff_report),
+            "missing": missing_count,
+            "proposed": proposed_count,
+            "unchanged": unchanged_count,
+        },
+        "review_required": True,
+        "human_review_directive": "A selecao final exige revisao humana dos itens cientificos; nao selecione automaticamente o ultimo timestamp sem verificacao dos dados.",
+    }
+
+    if output_path:
+        out_p = Path(output_path).resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text(yaml.safe_dump(candidate_config, sort_keys=False), encoding="utf-8")
+        result["output_path"] = str(out_p)
+        log_artifact_path("Candidate publication config written", out_p)
+
+    return result
+
