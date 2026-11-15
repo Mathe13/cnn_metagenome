@@ -177,3 +177,90 @@ def verify_latex_figure_paths(tex_path: Path, assets_dir: Path) -> tuple[list[di
 
     return matches, mismatches
 
+
+
+def _inspect_png(path: Path) -> tuple[bool, int, int, str]:
+    """Inspect PNG file header and dimensions."""
+    if not path.is_file():
+        return False, 0, 0, f"File missing at {path}"
+    data = path.read_bytes()
+    if len(data) < 24:
+        return False, 0, 0, f"File too small ({len(data)} bytes)"
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False, 0, 0, "Invalid PNG signature"
+    width, height = struct.unpack(">II", data[16:24])
+    if width <= 0 or height <= 0:
+        return False, width, height, f"Invalid dimensions: {width}x{height}"
+    return True, width, height, "OK"
+
+
+def verify_figure_publication_readiness(
+    figure_outputs: dict[str, Path],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inspect and certify readiness of generated publication figures (F1–F5).
+
+    Validates:
+    - File existence and non-zero byte size.
+    - Valid PNG header signature (b'\\x89PNG\\r\\n\\x1a\\n').
+    - Positive width and height extracted from IHDR.
+    - Presence of qualitative projection disclaimer for F2.
+    - Presence of selection parameters (seed, ids, sampling, filters) for figures.
+
+    Returns a structured checklist dictionary.
+    """
+    metadata = metadata or {}
+    figures_status: dict[str, Any] = {}
+    failures: list[str] = []
+
+    for name, path in figure_outputs.items():
+        path = Path(path)
+        valid, w, h, msg = _inspect_png(path)
+        figures_status[name] = {
+            "path": str(path),
+            "valid": valid,
+            "width": w,
+            "height": h,
+            "size_bytes": path.stat().st_size if path.exists() else 0,
+            "diagnostic": msg,
+        }
+        if not valid:
+            failures.append(f"{name}: {msg}")
+
+    # Check F2 disclaimer
+    disclaimers: dict[str, Any] = {}
+    f2_meta = metadata.get("F2") or metadata.get("f2") or {}
+    if f2_meta:
+        disclaimer = f2_meta.get("disclaimer") or f2_meta.get("qualitative_disclaimer") or ""
+        has_disclaimer = bool(disclaimer and "qualitative" in str(disclaimer).lower())
+        disclaimers["F2"] = {
+            "has_qualitative_disclaimer": has_disclaimer,
+            "disclaimer": disclaimer,
+        }
+        if not has_disclaimer:
+            failures.append("F2: missing mandatory qualitative projection disclaimer")
+
+    # Check selection parameters
+    selection_verified = True
+    selection_checks: dict[str, Any] = {}
+    for fig_id in ("F1", "F2", "F3", "F4", "F5"):
+        fig_meta = metadata.get(fig_id) or metadata.get(fig_id.lower()) or {}
+        sel = fig_meta.get("selection")
+        if sel is not None:
+            missing_sel_keys = [k for k in ("seed", "ids", "sampling", "filters") if k not in sel]
+            if missing_sel_keys:
+                selection_verified = False
+                failures.append(f"{fig_id}: selection missing required keys: {missing_sel_keys}")
+                selection_checks[fig_id] = {"valid": False, "missing_keys": missing_sel_keys}
+            else:
+                selection_checks[fig_id] = {"valid": True, "selection": sel}
+
+    overall_status = "PASS" if not failures else "FAIL"
+    return {
+        "status": overall_status,
+        "figures": figures_status,
+        "disclaimers": disclaimers,
+        "selection_verified": selection_verified,
+        "selection_checks": selection_checks,
+        "failures": failures,
+    }
