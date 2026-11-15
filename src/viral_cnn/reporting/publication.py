@@ -393,8 +393,10 @@ def validate_selection(
                 raise PublicationValidationError(f"{iid}: protocol mismatch in {manifest}")
             if declared.get("status") != "COMPLETE":
                 raise PublicationValidationError(f"{iid}: manifest status must be COMPLETE")
-            if declared.get("evidence_kind") not in {"empirical", "structural"}:
-                raise PublicationValidationError(f"{iid}: manifest {manifest}: evidence_kind must be empirical or structural")
+            if declared.get("evidence_kind") not in {"empirical", "structural", "derived"}:
+                raise PublicationValidationError(
+                    f"{iid}: manifest {manifest}: evidence_kind must be empirical or structural (or derived)"
+                )
             if enforce_provenance and declared.get("evidence_kind") == "empirical":
                 validate_artifact_provenance(declared, root)
             if declared.get("evidence_kind") == "structural":
@@ -410,6 +412,28 @@ def validate_selection(
                         raise PublicationValidationError(f"{iid}: structural derivation {kind} missing or hash mismatch: {derivation_path}")
                     if record["sha256"] not in verified_input_hashes:
                         raise PublicationValidationError(f"{iid}: structural derivation {kind} is not a hash-verified input")
+            if declared.get("evidence_kind") == "derived":
+                derivation = declared.get("derivation")
+                if not isinstance(derivation, dict):
+                    raise PublicationValidationError(f"{iid}: derived evidence must declare derivation dictionary")
+                for kind in ("source_artifact", "parent_manifest", "transformation"):
+                    if kind not in derivation or not isinstance(derivation[kind], dict):
+                        raise PublicationValidationError(f"{iid}: derived evidence missing derivation block '{kind}'")
+                for artifact_kind in ("source_artifact", "parent_manifest"):
+                    record = derivation[artifact_kind]
+                    if not record.get("path") or not record.get("sha256"):
+                        raise PublicationValidationError(f"{iid}: derivation {artifact_kind} must declare path and sha256")
+                    derivation_path = _resolve(root, str(record["path"]))
+                    if not derivation_path.is_file():
+                        raise PublicationValidationError(f"{iid}: derivation {artifact_kind} missing: {derivation_path}")
+                    actual_hash = sha256_file(derivation_path)
+                    if actual_hash != record["sha256"]:
+                        raise PublicationValidationError(f"{iid}: derivation {artifact_kind} hash mismatch: {derivation_path}")
+                    if record["sha256"] not in verified_input_hashes:
+                        raise PublicationValidationError(f"{iid}: derivation {artifact_kind} is not a hash-verified input")
+                trans_rec = derivation["transformation"]
+                if not trans_rec.get("name") or not trans_rec.get("code_sha256"):
+                    raise PublicationValidationError(f"{iid}: derivation transformation must declare name and code_sha256")
             if declared.get("transformation") != item.get("transformation"):
                 raise PublicationValidationError(f"{iid}: transformation mismatch in {manifest}")
             if "seed" not in declared or "split_id" not in declared:
@@ -449,11 +473,13 @@ def validate_selection(
                         source_hash = expected.get(source_field)
                         if isinstance(source_hash, str) and source_hash.lower().startswith("n/a -"):
                             continue
+                        if declared.get("evidence_kind") == "derived":
+                            continue
                         if source_hash not in verified_input_hashes:
                             raise PublicationValidationError(f"{iid}: {source_field} is not backed by a hash-verified input")
                     checkpoints = declared.get("checkpoints", [])
                     expected_checkpoints = expected.get("checkpoint_sha256s")
-                    if isinstance(expected_checkpoints, dict):
+                    if declared.get("evidence_kind") != "derived" and isinstance(expected_checkpoints, dict):
                         actual_checkpoints = {}
                         for checkpoint in checkpoints:
                             if not isinstance(checkpoint, dict) or not checkpoint.get("path") or not checkpoint.get("variant"):
@@ -468,9 +494,9 @@ def validate_selection(
                             actual_checkpoints[checkpoint["variant"]] = actual_sha
                         if actual_checkpoints != expected_checkpoints:
                             raise PublicationValidationError(f"{iid}: selected checkpoint variants/hashes differ from manifest")
-                    elif not (isinstance(expected_checkpoints, str) and expected_checkpoints.lower().startswith("n/a -")):
+                    elif declared.get("evidence_kind") != "derived" and not (isinstance(expected_checkpoints, str) and expected_checkpoints.lower().startswith("n/a -")):
                         raise PublicationValidationError(f"{iid}: checkpoint hashes must be a map or explicit n/a reason")
-                    elif checkpoints:
+                    elif declared.get("evidence_kind") != "derived" and checkpoints:
                         raise PublicationValidationError(f"{iid}: manifest has checkpoints but selection declares none")
                     panel_variants = item.get("expected", {}).get("panel_variants", {})
                     if panel_variants:
@@ -504,11 +530,19 @@ def validate_selection(
             row["checkpoint_sha256s"] = declared.get("scientific_identity", {}).get("checkpoint_sha256s")
             row["selection"] = declared.get("selection", {})
             row["panel_variants"] = declared.get("panel_variants", {})
-            row["status"] = "DERIVED_VERIFIED" if declared.get("evidence_kind") == "structural" else "EMPIRICAL_VERIFIED"
+            row["output_rows"] = declared.get("output_rows")
+            row["status"] = "DERIVED_VERIFIED" if declared.get("evidence_kind") in {"structural", "derived"} else "EMPIRICAL_VERIFIED"
         except PublicationValidationError as exc:
             row["diagnostic"] = str(exc)
             if row["status"] != "SYNTHETIC":
-                row["status"] = "MISSING" if "missing" in str(exc).lower() or "unset" in str(exc).lower() else "INVALID"
+                err = str(exc).lower()
+                is_missing = (
+                    f"{iid.lower()}: artifact missing" in err
+                    or f"{iid.lower()}: manifest missing" in err
+                    or "dependency missing" in err
+                    or "unset" in err
+                )
+                row["status"] = "MISSING" if is_missing else "INVALID"
         rows.append(row)
     failures = [r for r in rows if r["status"] not in {"EMPIRICAL_VERIFIED", "DERIVED_VERIFIED"}]
     if strict_empirical and failures:
@@ -552,7 +586,7 @@ def reconcile_value(
 def _load_table_artifact(path: Path) -> pd.DataFrame:
     """Load one explicitly selected CSV or Parquet table artifact."""
     if path.suffix.lower() == ".csv":
-        return pd.read_csv(path)
+        return pd.read_csv(path, comment="#")
     if path.suffix.lower() in {".parquet", ".pq"} or path.is_dir():
         return pd.read_parquet(path)
     raise PublicationValidationError(f"unsupported table artifact format: {path}")
@@ -1043,23 +1077,23 @@ def write_publication_manifest(
 
 
 PROPOSED_SOURCES: dict[str, str] = {
-    "T1": "results_reproduction/runs/<run_id>/short/01/ (short evaluation metrics)",
-    "T2": "results_reproduction/runs/<run_id>/short/02/ (profiling and latency)",
-    "T3": "results_reproduction/runs/<run_id>/short/09/ (noise degradation benchmark)",
-    "T4": "results_reproduction/runs/<run_id>/short/01/ (species F1 distribution)",
-    "T5": "results_reproduction/runs/<run_id>/short/06/ (latent space KNN/Silhouette)",
-    "T6": "results_reproduction/runs/<run_id>/short/06/ (hierarchy correlations)",
-    "T7": "results_reproduction/runs/<run_id>/short/06b/ (hierarchical entropy)",
+    "T1": "results_reproduction/runs/<run_id>/short/01/benchmark_clean_noise_summary.csv",
+    "T2": "results_reproduction/runs/<run_id>/short/01/table2_profiling.csv",
+    "T3": "results_reproduction/runs/<run_id>/short/09/benchmark_metrics_stratified.csv",
+    "T4": "results_reproduction/runs/<run_id>/short/01/table4_f1_bands.csv",
+    "T5": "results_reproduction/runs/<run_id>/short/06/table5_latent_clustering_metrics.csv",
+    "T6": "results_reproduction/runs/<run_id>/short/06/table6_taxonomic_rank_correlations.csv",
+    "T7": "results_reproduction/runs/<run_id>/short/02/table7_hierarchical_entropy.csv",
     "T8": "results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv",
-    "T9": "results_reproduction/runs/<run_id>/short/08/ (exploratory RSCU)",
-    "T10": "results_reproduction/runs/<run_id>/short/08/ (triplet composition)",
-    "T11": "results_reproduction/runs/<run_id>/short/08/ (permutation null architecture comparison)",
+    "T9": "results_reproduction/runs/<run_id>/short/08/table_09_exploratory_rscu.csv",
+    "T10": "results_reproduction/runs/<run_id>/short/08/table_10_translation_boundary_signals.csv",
+    "T11": "results_reproduction/runs/<run_id>/short/08/table_11_cooccurrence_synergy.csv",
     "T12": "results_reproduction/runs/<run_id>/long/03/table_12_long_voter_comparison.csv",
-    "F1": "results_reproduction/runs/<run_id>/short/09/ (noise robustness curves)",
-    "F2": "results_reproduction/runs/<run_id>/short/06b/selected_genera.csv (UMAP projections)",
-    "F3": "results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv (5 panels)",
-    "F4": "results_reproduction/runs/<run_id>/short/08/ (RSCU profile data)",
-    "F5": "results_reproduction/runs/<run_id>/short/08/edge_table.csv (network graph coordinates)",
+    "F1": "results_reproduction/runs/<run_id>/short/09/benchmark_metrics_stratified.csv",
+    "F2": "results_reproduction/runs/<run_id>/short/06b/umap_projection_convnext_f.csv",
+    "F3": "results_reproduction/runs/<run_id>/short/07/motif_perturbation_by_variant.csv",
+    "F4": "results_reproduction/runs/<run_id>/short/08/table_09_exploratory_rscu.csv",
+    "F5": "results_reproduction/runs/<run_id>/short/08/edge_table.csv",
 }
 
 FIVE_SPECIES_VARIANTS = {
@@ -1097,7 +1131,7 @@ def diagnose_publication_readiness(
 
     for item in config.get("items", []):
         iid = item.get("item_id", "")
-        proposed = PROPOSED_SOURCES.get(iid, "results_reproduction/runs/<run_id>/...")
+        proposed = item.get("proposed_source") or PROPOSED_SOURCES.get(iid, "results_reproduction/runs/<run_id>/...")
         artifact_raw = item.get("artifact", "")
         manifest_raw = item.get("manifest", "")
 

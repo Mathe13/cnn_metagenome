@@ -172,9 +172,15 @@ class M07Tests(unittest.TestCase):
             func = get_transformation(item_id)
             # Create synthetic input df
             if item_id == "T1":
-                df_in = pd.DataFrame({"model": ["M1"], "taxonomic_level": ["Species"], "accuracy": [90.0], "top_5": [98.0], "macro_f1": [89.0]})
+                df_in = pd.DataFrame({
+                    "model": ["M1"], "taxonomic_level": ["Species"], "accuracy": [90.0], "top_5": [98.0], "macro_f1": [89.0],
+                    "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0], "latency_ms": [1.5],
+                })
             elif item_id == "T2":
-                df_in = pd.DataFrame({"model": ["M1"], "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0]})
+                df_in = pd.DataFrame({
+                    "model": ["M1"], "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0],
+                    "peak_vram_mb": [172.0], "step_time_ms": [1.5], "throughput_seq_s": [22000.0],
+                })
             elif item_id == "T3":
                 df_in = pd.DataFrame({"epsilon": [0.0, 0.05], "acc": [90.0, 85.0]})
             elif item_id == "T4":
@@ -202,7 +208,10 @@ class M07Tests(unittest.TestCase):
 
     # C3: Derived manifest emission
     def test_derived_manifest_emission(self):
-        source_df = pd.DataFrame({"model": ["ResNet50"], "taxonomic_level": ["Species"], "accuracy": [85.0], "top_5": [95.0], "macro_f1": [84.0]})
+        source_df = pd.DataFrame({
+            "model": ["ResNet50"], "taxonomic_level": ["Species"], "accuracy": [85.0], "top_5": [95.0], "macro_f1": [84.0],
+            "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0], "latency_ms": [1.5],
+        })
         src_path = self.root / "evidence" / "raw_t1.csv"
         source_df.to_csv(src_path, index=False)
 
@@ -248,9 +257,15 @@ class M07Tests(unittest.TestCase):
                 elif item_id == "F5":
                     df = pd.DataFrame({"x1": [0.0], "y1": [0.0], "x2": [1.0], "y2": [1.0]})
                 elif item_id == "T1":
-                    df = pd.DataFrame({"model": ["M"], "taxonomic_level": ["Species"], "accuracy": [90.0], "top_5": [98.0], "macro_f1": [89.0]})
+                    df = pd.DataFrame({
+                        "model": ["M"], "taxonomic_level": ["Species"], "accuracy": [90.0], "top_5": [98.0], "macro_f1": [89.0],
+                        "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0], "latency_ms": [1.5],
+                    })
                 elif item_id == "T2":
-                    df = pd.DataFrame({"model": ["M"], "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0]})
+                    df = pd.DataFrame({
+                        "model": ["M"], "backbone_m": [15.0], "fc_params_m": [28.0], "parameters_m": [43.0],
+                        "peak_vram_mb": [172.0], "step_time_ms": [1.5], "throughput_seq_s": [22000.0],
+                    })
                 elif item_id == "T12":
                     df = pd.DataFrame({"model": ["M"], "majority_vote_acc": [70.0], "mean_logits_acc": [71.0]})
                 elif item_id == "T11":

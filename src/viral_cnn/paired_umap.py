@@ -25,6 +25,21 @@ DISCLAIMER = '# QUALITATIVE ONLY: independently fitted 2D projections; axes are 
 INTERPRETATION = '# Do not infer quantitative cluster separation or phylogenetic distance.\n'
 
 
+def load_projection_coordinates(path: str | Path) -> pd.DataFrame:
+    """Load projection coordinates CSV, stripping qualitative disclaimer comments."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Projection CSV not found: {path}")
+    frame = pd.read_csv(path, comment="#")
+    required = {"umap_1", "umap_2"}
+    if not required.issubset(frame.columns):
+        from viral_cnn.reporting.publication import PublicationValidationError
+        raise PublicationValidationError(
+            f"Projection file missing coordinate columns {required - set(frame.columns)}: {path}"
+        )
+    return frame
+
+
 @dataclass(frozen=True)
 class ProjectionConfig:
     """Sampling limits for a shared genus-stratified visualization population."""
