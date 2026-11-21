@@ -1222,24 +1222,25 @@ class TaxonomyEntropyAnalyzer:
             species_probs = F.softmax(logits.float(), dim=-1)
             h_species = self.calculate_entropy(species_probs)
 
-            genus_probs = self.get_genus_probs(species_probs)
-            h_genus = self.calculate_entropy(genus_probs)
-
             latent = self.activations.get("pre_classifier")
             if latent is None:
                 raise RuntimeError("Pre-classifier activation hook did not fire.")
 
             h_activation = self.calculate_activation_entropy(latent, normalize=True)
-            gap = h_species - h_genus
 
             res = {
                 "h_species": h_species.cpu().numpy(),
-                "h_genus": h_genus.cpu().numpy(),
                 "h_activation": h_activation.cpu().numpy(),
-                "hierarchical_entropy_gap": gap.cpu().numpy(),
             }
 
-            if self.allow_partial and (self.species_to_genus_map < 0).any():
+            is_partial = self.allow_partial and (self.species_to_genus_map < 0).any()
+            if not is_partial:
+                genus_probs = self.get_genus_probs(species_probs)
+                h_genus = self.calculate_entropy(genus_probs)
+                gap = h_species - h_genus
+                res["h_genus"] = h_genus.cpu().numpy()
+                res["hierarchical_entropy_gap"] = gap.cpu().numpy()
+            else:
                 known_mask = (self.species_to_genus_map >= 0)
                 excluded_mask = ~known_mask
                 excluded_mass = species_probs[:, excluded_mask].sum(dim=-1)
@@ -1275,6 +1276,8 @@ class TaxonomyEntropyAnalyzer:
         """
         Iterates across dataloader and aggregates sample-weighted averages
         for Table 7 reporting. Reads batch target labels when available.
+        When partial taxonomy is used, conditional entropy metrics are averaged
+        specifically over fragments whose true species has a known genus.
         """
         all_h_species: List[np.ndarray] = []
         all_h_genus: List[np.ndarray] = []
@@ -1309,16 +1312,13 @@ class TaxonomyEntropyAnalyzer:
 
             metrics = self.analyze_batch(inputs)
             all_h_species.append(metrics["h_species"])
-            all_h_genus.append(metrics["h_genus"])
             all_h_act.append(metrics["h_activation"])
-            all_gap.append(metrics["hierarchical_entropy_gap"])
 
-            if "h_species_conditional" in metrics:
-                all_h_species_cond.append(metrics["h_species_conditional"])
-                all_h_genus_cond.append(metrics["h_genus_conditional"])
-                all_gap_cond.append(metrics["gap_conditional"])
-                all_excluded_mass.append(metrics["excluded_prob_mass"])
+            if "h_genus" in metrics:
+                all_h_genus.append(metrics["h_genus"])
+                all_gap.append(metrics["hierarchical_entropy_gap"])
 
+            with_genus_mask = None
             if labels is not None:
                 has_truth_labels = True
                 lbl_tensor = labels if isinstance(labels, torch.Tensor) else torch.tensor(labels)
@@ -1327,9 +1327,24 @@ class TaxonomyEntropyAnalyzer:
                 valid_idx_mask = (lbl_long >= 0) & (lbl_long < len(self.species_to_genus_map))
                 mapped_genus = torch.full_like(lbl_long, fill_value=-1)
                 mapped_genus[valid_idx_mask] = self.species_to_genus_map[lbl_long[valid_idx_mask]]
-                with_genus = int((mapped_genus >= 0).sum().item())
+                with_genus_mask = (mapped_genus >= 0).cpu().numpy()
+                with_genus = int(with_genus_mask.sum())
                 n_truth_with_genus += with_genus
                 n_truth_without_genus += (len(lbl_long) - with_genus)
+
+            if "h_species_conditional" in metrics:
+                if with_genus_mask is not None:
+                    # Filter conditional entropy metrics to fragments whose true species has a known genus
+                    if with_genus_mask.any():
+                        all_h_species_cond.append(metrics["h_species_conditional"][with_genus_mask])
+                        all_h_genus_cond.append(metrics["h_genus_conditional"][with_genus_mask])
+                        all_gap_cond.append(metrics["gap_conditional"][with_genus_mask])
+                        all_excluded_mass.append(metrics["excluded_prob_mass"][with_genus_mask])
+                else:
+                    all_h_species_cond.append(metrics["h_species_conditional"])
+                    all_h_genus_cond.append(metrics["h_genus_conditional"])
+                    all_gap_cond.append(metrics["gap_conditional"])
+                    all_excluded_mass.append(metrics["excluded_prob_mass"])
 
             batch_idx += 1
 
@@ -1337,18 +1352,21 @@ class TaxonomyEntropyAnalyzer:
             raise ValueError("Dataloader produced zero batches.")
 
         concat_species = np.concatenate(all_h_species)
-        concat_genus = np.concatenate(all_h_genus)
         concat_act = np.concatenate(all_h_act)
-        concat_gap = np.concatenate(all_gap)
 
         out = {
             "mean_h_species": round(float(np.mean(concat_species)), 4),
             "max_h_species": round(float(np.max(concat_species)), 4),
-            "mean_h_genus": round(float(np.mean(concat_genus)), 4),
             "mean_h_activation": round(float(np.mean(concat_act)), 4),
-            "mean_hierarchical_gap": round(float(np.mean(concat_gap)), 4),
             "n_samples": int(len(concat_species)),
         }
+
+        # Only export unnormalized mean_h_genus and mean_hierarchical_gap if all classes had known genus
+        if all_h_genus:
+            concat_genus = np.concatenate(all_h_genus)
+            concat_gap = np.concatenate(all_gap)
+            out["mean_h_genus"] = round(float(np.mean(concat_genus)), 4)
+            out["mean_hierarchical_gap"] = round(float(np.mean(concat_gap)), 4)
 
         if all_h_species_cond:
             concat_sp_cond = np.concatenate(all_h_species_cond)

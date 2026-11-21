@@ -82,6 +82,8 @@ Computes conditional predictive entropy on known genera without grouping unassig
 13. WHEN `analyze_batch` processes inputs under partial mapping THEN the system SHALL compute `excluded_prob_mass` equal to the sum of softmax probabilities assigned to species with mapping `-1`.
 14. WHEN `analyze_dataloader` processes batches containing target labels THEN the system SHALL record `n_total`, `n_truth_with_genus`, and `n_truth_without_genus` based on whether true species labels map to a known genus.
 15. The system SHALL ensure that `gap_conditional >= -1e-5` for all batches under partial mapping.
+16. WHEN `analyze_dataloader` aggregates conditional entropy metrics (`mean_h_species_conditional`, `mean_h_genus_conditional`, `mean_gap_conditional`, `mean_excluded_prob_mass`) with target labels present THEN the system SHALL average these metrics strictly over fragments whose true species has a known genus (`truth_with_genus`).
+17. WHEN partial mapping is active THEN the system SHALL omit unnormalized `mean_h_genus` and `mean_hierarchical_gap` from the exported summary, preventing misinterpretation of unnormalized probability distributions.
 
 **Independent test:** Run `TaxonomyEntropyAnalyzer` with a known model and synthetic partial mapping tensor, asserting conditional metrics and excluded probability mass.
 
@@ -91,10 +93,10 @@ Enriches Table 6 with explicit counts of eligible and excluded species classes a
 
 **Acceptance Criteria**
 
-16. WHEN Notebook 06 generates `table6_taxonomic_rank_correlations.csv` THEN the system SHALL preserve all existing columns (`Model`, `Transition`, `Pearson_r`, `Spearman_rho`, `N_taxa`).
-17. The system SHALL include `Eligible_Species` and `Excluded_Species` in `table6_taxonomic_rank_correlations.csv` reporting the exact number of species classes eligible and excluded for each transition (7,746 eligible for Species -> Genus, 4,583 eligible for Genus -> Order on standard reference).
-18. The system SHALL include `Eligible_Fragments` and `Excluded_Fragments` in `table6_taxonomic_rank_correlations.csv` computed from the test labels evaluated for that model.
-19. WHEN `transform_table_6_hierarchy_correlations` processes the enriched Table 6 THEN the transformation SHALL preserve the new columns without raising `PublicationValidationError`.
+18. WHEN Notebook 06 generates `table6_taxonomic_rank_correlations.csv` THEN the system SHALL preserve all existing columns (`Model`, `Transition`, `Pearson_r`, `Spearman_rho`, `N_taxa`).
+19. The system SHALL include `Eligible_Species` and `Excluded_Species` in `table6_taxonomic_rank_correlations.csv` reporting the exact number of species classes eligible and excluded for each transition (7,746 eligible for Species -> Genus, 4,583 eligible for Genus -> Order on standard reference). For the transition `Genus -> Order`, the system SHALL require both `Genus` AND `Order` to be known for a species to be eligible, excluding species where `Order` is known but `Genus` is missing.
+20. The system SHALL include `Eligible_Fragments` and `Excluded_Fragments` in `table6_taxonomic_rank_correlations.csv` computed from the test labels evaluated for that specific model (`labels_cache[m_name]`), requiring both ranks for `Genus -> Order`.
+21. WHEN `transform_table_6_hierarchy_correlations` processes the enriched Table 6 THEN the transformation SHALL preserve the new columns without raising `PublicationValidationError`.
 
 **Independent test:** Execute Table 6 generation logic in Notebook 06 smoke mode and assert column presence and non-negative counts.
 

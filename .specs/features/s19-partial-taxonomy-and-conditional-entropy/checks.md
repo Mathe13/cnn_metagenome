@@ -40,15 +40,15 @@ Proof: `.venv/bin/python3 -m unittest -k test_c8_analyzer_accepts_partial_mappin
 **C9** - `TaxonomyEntropyAnalyzer.analyze_batch` computes `h_species`, `h_species_conditional`, `h_genus_conditional`, `gap_conditional >= -1e-5`, and `excluded_prob_mass` (AC 12, AC 13, AC 15)
 Proof: `.venv/bin/python3 -m unittest -k test_c9_analyzer_batch_conditional_entropy tests/test_s19_partial_taxonomy_and_conditional_entropy.py`
 
-**C10** - `TaxonomyEntropyAnalyzer.analyze_dataloader` tallies `n_total`, `n_truth_with_genus`, and `n_truth_without_genus` based on batch target labels (AC 14)
+**C10** - `TaxonomyEntropyAnalyzer.analyze_dataloader` tallies `n_total`, `n_truth_with_genus`, `n_truth_without_genus` based on batch target labels, averages conditional metrics strictly over fragments with known genus, and omits unnormalized `mean_h_genus` and `mean_hierarchical_gap` under partial mapping (AC 14, AC 16, AC 17)
 Proof: `.venv/bin/python3 -m unittest -k test_c10_analyzer_dataloader_truth_counts tests/test_s19_partial_taxonomy_and_conditional_entropy.py`
 
 ### S3 - Notebook 06 Table 6 Transition Coverage · 2 files · 20 KB · ~7k
 
-**C11** - Notebook 06 Table 6 exports `table6_taxonomic_rank_correlations.csv` preserving existing columns and adding `Eligible_Species`, `Excluded_Species`, `Eligible_Fragments`, and `Excluded_Fragments` (AC 16, AC 17, AC 18)
+**C11** - Notebook 06 Table 6 exports `table6_taxonomic_rank_correlations.csv` preserving existing columns, requiring both Genus and Order for Genus -> Order, and using model-specific labels for fragment counts (AC 18, AC 19, AC 20)
 Proof: `.venv/bin/python3 -m unittest -k test_c11_table6_rank_transition_coverage tests/test_s19_partial_taxonomy_and_conditional_entropy.py`
 
-**C12** - `transform_table_6_hierarchy_correlations` preserves the enriched Table 6 columns without `PublicationValidationError` (AC 19)
+**C12** - `transform_table_6_hierarchy_correlations` preserves the enriched Table 6 columns without `PublicationValidationError` (AC 21)
 Proof: `.venv/bin/python3 -m unittest -k test_c12_transform_table_6_preserves_enriched_columns tests/test_s19_partial_taxonomy_and_conditional_entropy.py`
 
 ## Coverage

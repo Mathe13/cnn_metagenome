@@ -238,7 +238,7 @@ class TestS19PartialTaxonomyAndConditionalEntropy(unittest.TestCase):
             self.assertTrue((res["excluded_prob_mass"] <= 1.0).all())
 
     def test_c10_analyzer_dataloader_truth_counts(self):
-        """C10: analyze_dataloader tallies n_total, n_truth_with_genus, and n_truth_without_genus."""
+        """C10: analyze_dataloader tallies truth counts and averages conditional entropy strictly on known genus."""
         model = DummyFeatureModel(in_features=16, num_classes=5)
         partial_mapping = torch.tensor([0, 0, 1, -1, -1], dtype=torch.long)
 
@@ -259,18 +259,49 @@ class TestS19PartialTaxonomyAndConditionalEntropy(unittest.TestCase):
             self.assertIn("mean_gap_conditional", summary)
             self.assertIn("mean_excluded_prob_mass", summary)
 
+            # Ensure unnormalized mean_h_genus and mean_hierarchical_gap are omitted when partial
+            self.assertNotIn("mean_h_genus", summary)
+            self.assertNotIn("mean_hierarchical_gap", summary)
+
     def test_c11_table6_rank_transition_coverage(self):
-        """C11: Table 6 format includes Eligible_Species, Excluded_Species, Eligible_Fragments, Excluded_Fragments."""
+        """C11: Table 6 transition Genus -> Order requires both ranks known, avoiding counting species with missing Genus."""
+        # In self.tax_df:
+        # id 1: GenusA, OrderX (both known)
+        # id 2: GenusA, OrderX (both known)
+        # id 3: GenusB, Order Unclassified (Order missing)
+        # id 4: Genus Unassigned, Order empty (both missing)
+        # id 5: Genus None (missing), Order OrderY (Order known, BUT Genus missing!)
+        mapped_species = [0, 1, 2, 3, 4]
+        sp_to_genus = {0: "GenusA", 1: "GenusA", 2: "GenusB"}
+        sp_to_order = {0: "OrderX", 1: "OrderX", 4: "OrderY"}
+
+        eligible_sp_genus = {k for k in mapped_species if pd.notna(sp_to_genus.get(k))}
+        eligible_sp_genus_order = {k for k in mapped_species if pd.notna(sp_to_genus.get(k)) and pd.notna(sp_to_order.get(k))}
+
+        # Species -> Genus has 3 eligible species (0, 1, 2)
+        self.assertEqual(len(eligible_sp_genus), 3)
+        # Genus -> Order MUST have only 2 eligible species (0, 1), NOT 3 (species 4 has OrderY but missing Genus!)
+        self.assertEqual(len(eligible_sp_genus_order), 2)
+        self.assertNotIn(4, eligible_sp_genus_order)
+
+        # Model-specific test labels
+        y_model = np.array([0, 1, 2, 4, 3, 0])
+        sp_eligible_frags = int(np.fromiter((int(sp) in eligible_sp_genus for sp in y_model), dtype=bool, count=len(y_model)).sum())
+        ord_eligible_frags = int(np.fromiter((int(sp) in eligible_sp_genus_order for sp in y_model), dtype=bool, count=len(y_model)).sum())
+
+        self.assertEqual(sp_eligible_frags, 4)  # labels 0, 1, 2, 0
+        self.assertEqual(ord_eligible_frags, 3)  # labels 0, 1, 0 (label 4 is excluded because Genus is missing!)
+
         table6_sample = pd.DataFrame([{
             "Model": "ResNet50_Clean",
-            "Transition": "Species -> Genus",
+            "Transition": "Genus -> Order",
             "Pearson_r": 0.85,
             "Spearman_rho": 0.84,
             "N_taxa": 200,
-            "Eligible_Species": 7746,
-            "Excluded_Species": 5937,
-            "Eligible_Fragments": 100000,
-            "Excluded_Fragments": 33235,
+            "Eligible_Species": len(eligible_sp_genus_order),
+            "Excluded_Species": len(mapped_species) - len(eligible_sp_genus_order),
+            "Eligible_Fragments": ord_eligible_frags,
+            "Excluded_Fragments": len(y_model) - ord_eligible_frags,
         }])
         csv_path = self.root / "table6_taxonomic_rank_correlations.csv"
         table6_sample.to_csv(csv_path, index=False)
@@ -282,6 +313,8 @@ class TestS19PartialTaxonomyAndConditionalEntropy(unittest.TestCase):
         ]
         for col in required_cols:
             self.assertIn(col, read_df.columns)
+        self.assertEqual(read_df["Eligible_Species"].iloc[0], 2)
+        self.assertEqual(read_df["Eligible_Fragments"].iloc[0], 3)
 
     def test_c12_transform_table_6_preserves_enriched_columns(self):
         """C12: transform_table_6_hierarchy_correlations preserves the new transition coverage columns."""
