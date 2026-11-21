@@ -1101,8 +1101,10 @@ class TaxonomyEntropyAnalyzer:
         model: torch.nn.Module,
         species_to_genus_map: Union[torch.Tensor, np.ndarray, List[int]],
         device: Optional[Union[str, torch.device]] = None,
+        allow_partial: bool = False,
     ):
         self.model = model
+        self.allow_partial = allow_partial
         if device is not None:
             self.device = torch.device(device) if isinstance(device, str) else device
         else:
@@ -1118,7 +1120,7 @@ class TaxonomyEntropyAnalyzer:
                 species_to_genus_map, dtype=torch.long, device=self.device
             )
 
-        if (self.species_to_genus_map < 0).any():
+        if not self.allow_partial and (self.species_to_genus_map < 0).any():
             raise ValueError(
                 "species_to_genus_map cannot contain negative class indices."
             )
@@ -1186,17 +1188,22 @@ class TaxonomyEntropyAnalyzer:
     def get_genus_probs(self, species_probs: torch.Tensor) -> torch.Tensor:
         """Aggregates species probabilities into genus probabilities via scatter_add_."""
         num_batch = species_probs.shape[0]
-        num_genus = int(self.species_to_genus_map.max().item() + 1)
+        valid_map = self.species_to_genus_map[self.species_to_genus_map >= 0]
+        num_genus = int(valid_map.max().item() + 1) if len(valid_map) > 0 else 1
 
         genus_probs = torch.zeros(
             (num_batch, num_genus),
             dtype=species_probs.dtype,
             device=self.device,
         )
-        mapping = (
-            self.species_to_genus_map.unsqueeze(0).expand(num_batch, -1)
-        )
-        genus_probs.scatter_add_(1, mapping, species_probs)
+        if not self.allow_partial or not (self.species_to_genus_map < 0).any():
+            mapping = self.species_to_genus_map.unsqueeze(0).expand(num_batch, -1)
+            genus_probs.scatter_add_(1, mapping, species_probs)
+        else:
+            known_mask = self.species_to_genus_map >= 0
+            known_genus_indices = self.species_to_genus_map[known_mask]
+            mapping = known_genus_indices.unsqueeze(0).expand(num_batch, -1)
+            genus_probs.scatter_add_(1, mapping, species_probs[:, known_mask])
         return genus_probs
 
     def analyze_batch(self, inputs: torch.Tensor) -> Dict[str, np.ndarray]:
@@ -1225,36 +1232,78 @@ class TaxonomyEntropyAnalyzer:
             h_activation = self.calculate_activation_entropy(latent, normalize=True)
             gap = h_species - h_genus
 
-            return {
+            res = {
                 "h_species": h_species.cpu().numpy(),
                 "h_genus": h_genus.cpu().numpy(),
                 "h_activation": h_activation.cpu().numpy(),
                 "hierarchical_entropy_gap": gap.cpu().numpy(),
             }
 
+            if self.allow_partial and (self.species_to_genus_map < 0).any():
+                known_mask = (self.species_to_genus_map >= 0)
+                excluded_mask = ~known_mask
+                excluded_mass = species_probs[:, excluded_mask].sum(dim=-1)
+
+                known_logits = logits.float()[:, known_mask]
+                cond_species_probs = F.softmax(known_logits, dim=-1)
+                h_species_cond = self.calculate_entropy(cond_species_probs)
+
+                known_genus_indices = self.species_to_genus_map[known_mask]
+                num_known_genera = int(known_genus_indices.max().item() + 1) if len(known_genus_indices) > 0 else 1
+                cond_genus_probs = torch.zeros(
+                    (logits.shape[0], num_known_genera),
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                mapping = known_genus_indices.unsqueeze(0).expand(logits.shape[0], -1)
+                cond_genus_probs.scatter_add_(1, mapping, cond_species_probs)
+                h_genus_cond = self.calculate_entropy(cond_genus_probs)
+                gap_cond = h_species_cond - h_genus_cond
+
+                res["h_species_conditional"] = h_species_cond.cpu().numpy()
+                res["h_genus_conditional"] = h_genus_cond.cpu().numpy()
+                res["gap_conditional"] = gap_cond.cpu().numpy()
+                res["excluded_prob_mass"] = excluded_mass.cpu().numpy()
+
+            return res
+
     def analyze_dataloader(
         self,
         dataloader: Any,
         max_batches: Optional[int] = None,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """
         Iterates across dataloader and aggregates sample-weighted averages
-        for Table 7 reporting.
+        for Table 7 reporting. Reads batch target labels when available.
         """
         all_h_species: List[np.ndarray] = []
         all_h_genus: List[np.ndarray] = []
         all_h_act: List[np.ndarray] = []
         all_gap: List[np.ndarray] = []
 
+        all_h_species_cond: List[np.ndarray] = []
+        all_h_genus_cond: List[np.ndarray] = []
+        all_gap_cond: List[np.ndarray] = []
+        all_excluded_mass: List[np.ndarray] = []
+
+        n_total_fragments = 0
+        n_truth_with_genus = 0
+        n_truth_without_genus = 0
+        has_truth_labels = False
+
         batch_idx = 0
         for batch in dataloader:
             if max_batches is not None and batch_idx >= max_batches:
                 break
 
+            labels = None
             if isinstance(batch, (list, tuple)):
                 inputs = batch[0]
+                if len(batch) > 1:
+                    labels = batch[1]
             elif isinstance(batch, dict):
                 inputs = batch.get("inputs") or batch.get("sequences")
+                labels = batch.get("labels") or batch.get("label")
             else:
                 inputs = batch
 
@@ -1263,6 +1312,25 @@ class TaxonomyEntropyAnalyzer:
             all_h_genus.append(metrics["h_genus"])
             all_h_act.append(metrics["h_activation"])
             all_gap.append(metrics["hierarchical_entropy_gap"])
+
+            if "h_species_conditional" in metrics:
+                all_h_species_cond.append(metrics["h_species_conditional"])
+                all_h_genus_cond.append(metrics["h_genus_conditional"])
+                all_gap_cond.append(metrics["gap_conditional"])
+                all_excluded_mass.append(metrics["excluded_prob_mass"])
+
+            if labels is not None:
+                has_truth_labels = True
+                lbl_tensor = labels if isinstance(labels, torch.Tensor) else torch.tensor(labels)
+                lbl_long = lbl_tensor.to(self.device).long()
+                n_total_fragments += len(lbl_long)
+                valid_idx_mask = (lbl_long >= 0) & (lbl_long < len(self.species_to_genus_map))
+                mapped_genus = torch.full_like(lbl_long, fill_value=-1)
+                mapped_genus[valid_idx_mask] = self.species_to_genus_map[lbl_long[valid_idx_mask]]
+                with_genus = int((mapped_genus >= 0).sum().item())
+                n_truth_with_genus += with_genus
+                n_truth_without_genus += (len(lbl_long) - with_genus)
+
             batch_idx += 1
 
         if not all_h_species:
@@ -1273,7 +1341,7 @@ class TaxonomyEntropyAnalyzer:
         concat_act = np.concatenate(all_h_act)
         concat_gap = np.concatenate(all_gap)
 
-        return {
+        out = {
             "mean_h_species": round(float(np.mean(concat_species)), 4),
             "max_h_species": round(float(np.max(concat_species)), 4),
             "mean_h_genus": round(float(np.mean(concat_genus)), 4),
@@ -1281,4 +1349,26 @@ class TaxonomyEntropyAnalyzer:
             "mean_hierarchical_gap": round(float(np.mean(concat_gap)), 4),
             "n_samples": int(len(concat_species)),
         }
+
+        if all_h_species_cond:
+            concat_sp_cond = np.concatenate(all_h_species_cond)
+            concat_ge_cond = np.concatenate(all_h_genus_cond)
+            concat_gap_cond = np.concatenate(all_gap_cond)
+            concat_excl = np.concatenate(all_excluded_mass)
+
+            out.update({
+                "mean_h_species_conditional": round(float(np.mean(concat_sp_cond)), 4),
+                "mean_h_genus_conditional": round(float(np.mean(concat_ge_cond)), 4),
+                "mean_gap_conditional": round(float(np.mean(concat_gap_cond)), 4),
+                "mean_excluded_prob_mass": round(float(np.mean(concat_excl)), 4),
+            })
+
+        if has_truth_labels:
+            out.update({
+                "n_total": n_total_fragments,
+                "n_truth_with_genus": n_truth_with_genus,
+                "n_truth_without_genus": n_truth_without_genus,
+            })
+
+        return out
 

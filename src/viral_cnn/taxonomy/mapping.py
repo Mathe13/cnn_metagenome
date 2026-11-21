@@ -153,3 +153,75 @@ def build_species_to_genus_tensor(
     return tensor
 
 
+def build_partial_species_to_genus_tensor(
+    taxonomy_parquet_path: Union[str, Path],
+    num_species: int = 13683,
+    device: Union[str, torch.device] = "cpu",
+) -> torch.Tensor:
+    """
+    Builds a PyTorch LongTensor mapping species model labels (0 .. num_species - 1)
+    to contiguous genus indices (0 .. N_known_genera - 1), representing unassigned
+    or unknown genus with -1.
+
+    Scientific invariant:
+    - Species with known genus map to contiguous [0 .. N_known_genera - 1].
+    - Species with missing, null, or placeholder genus map to -1.
+    - Never groups unassigned species into an artificial 'Unknown_Genus' class.
+    """
+    parquet_file = Path(taxonomy_parquet_path)
+    if not parquet_file.exists():
+        raise FileNotFoundError(f"Taxonomy Parquet not found: {parquet_file}")
+
+    log_artifact_path("taxonomy parquet for partial species-to-genus", parquet_file)
+    df = pd.read_parquet(parquet_file)
+
+    genus_col: Optional[str] = None
+    for cand in ["genus_idx", "genus_id", "Genus", "genus"]:
+        if cand in df.columns:
+            genus_col = cand
+            break
+
+    if genus_col is None:
+        raise ValueError(
+            f"Taxonomy Parquet at {parquet_file} must contain one of: "
+            f"['genus_idx', 'genus_id', 'Genus', 'genus']. Found columns: {list(df.columns)}"
+        )
+
+    df_clean = df.copy()
+    raw_genus = df_clean[genus_col].astype("string").str.strip()
+    is_missing = (
+        raw_genus.isna()
+        | raw_genus.eq("").fillna(False)
+        | raw_genus.str.startswith(("Unassigned", "Unclassified", "Unknown"), na=False)
+    )
+    clean_genus = raw_genus.mask(is_missing, pd.NA)
+
+    known_genera = sorted(clean_genus.dropna().unique())
+    genus_to_idx = {g: i for i, g in enumerate(known_genera)}
+
+    mapping_arr = np.full(num_species, fill_value=-1, dtype=np.int64)
+
+    if "model_label" in df_clean.columns:
+        for idx in range(len(df_clean)):
+            row = df_clean.iloc[idx]
+            lbl = int(row["model_label"])
+            g = clean_genus.iloc[idx]
+            if 0 <= lbl < num_species and pd.notna(g) and g in genus_to_idx:
+                mapping_arr[lbl] = genus_to_idx[g]
+    elif "id" in df_clean.columns:
+        for idx in range(len(df_clean)):
+            row = df_clean.iloc[idx]
+            lbl = taxonomic_id_to_model_label(int(row["id"]))
+            g = clean_genus.iloc[idx]
+            if 0 <= lbl < num_species and pd.notna(g) and g in genus_to_idx:
+                mapping_arr[lbl] = genus_to_idx[g]
+    else:
+        for idx in range(min(len(df_clean), num_species)):
+            g = clean_genus.iloc[idx]
+            if pd.notna(g) and g in genus_to_idx:
+                mapping_arr[idx] = genus_to_idx[g]
+
+    return torch.tensor(mapping_arr, dtype=torch.long, device=device)
+
+
+

@@ -420,7 +420,15 @@ def preflight_notebook(notebook_id: str, data_root: Union[str, Path], *, smoke_t
         }
     topology = JupyterHubDataTopology(data_root)
     results = []
-    for spec in NOTEBOOK_REQUIREMENTS[notebook_id]:
+    requirements = list(NOTEBOOK_REQUIREMENTS[notebook_id])
+    if notebook_id == "short/05":
+        mode = os.getenv("M01_MODE", "curate")
+        if mode in ("derive_partial_existing", "audit_existing"):
+            requirements = [
+                {"path": "short/species_csv", "kind": "file"},
+                {"path": "short/hybrid_taxonomy_parquet", "kind": "parquet"},
+            ]
+    for spec in requirements:
         path = _resolve_requirement(topology, spec["path"])
         ok = path.exists() and os.access(path, os.R_OK)
         detail = "readable" if ok else ("missing" if not path.exists() else "unreadable")
@@ -662,12 +670,26 @@ def ensure_smoke_test_artifacts(
             "id": [i + 1 for i in range(3)],
         }).to_csv(genus_tax_file, index=False)
 
+    # 4. Taxonomy Parquet (hybrid) for testing partial derivation and hierarchy
+    tax_parquet_dir = root / "cnn_kraken" / "data_taxonomy_parquet"
+    tax_parquet_dir.mkdir(parents=True, exist_ok=True)
+    tax_parquet_file = tax_parquet_dir / "main_taxonomy_hybrid_ictv_ncbi.parquet"
+    if not tax_parquet_file.exists():
+        pd.DataFrame({
+            "id": [1, 2, 3, 4, 5],
+            "species": [f"Taxon_{i+1}" for i in range(5)],
+            "Genus": ["Genus_1", "Genus_1", "Genus_2", "Unassigned", None],
+            "Order": ["Order_1", "Order_1", "Unclassified", "", "Order_2"],
+            "taxonomy_source": "synthetic",
+        }).to_parquet(tax_parquet_file, index=False)
+
     return {
         "short": {
             "test_parquet": str(short_test_file),
             "genus_test_parquet": str(genus_test_file),
             "species_csv": str(tax_file),
             "genus_csv": str(genus_tax_file),
+            "hybrid_taxonomy_parquet": str(tax_parquet_file),
         },
         "long": {
             "test_parquet": str(long_test_file),

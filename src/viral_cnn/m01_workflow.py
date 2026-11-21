@@ -246,7 +246,8 @@ def _curate(config: dict[str, Any], output: Path, smoke: bool) -> tuple[dict[str
     from viral_cnn.data.audit import audit_partition_duplicates
 
     mode = config['mode']
-    if mode not in ('curate','audit_existing'):raise ValueError('M01_MODE must be curate or audit_existing')
+    if mode not in ('curate','audit_existing','derive_partial_existing'):
+        raise ValueError('M01_MODE must be curate, audit_existing or derive_partial_existing')
     inputs: list[Path] = []
     if smoke and mode == 'curate':
         taxonomy = generate_synthetic_taxonomy(100)
@@ -254,11 +255,56 @@ def _curate(config: dict[str, Any], output: Path, smoke: bool) -> tuple[dict[str
         _reject_synthetic_taxonomy(taxonomy,smoke)
         report = validate_taxonomy_identity(taxonomy,original)
     else:
-        mapping = Path(config['original_mapping']);original = _table(mapping);inputs.append(mapping)
+        mapping = Path(config['original_mapping'])
+        if smoke and not mapping.exists():
+            mapping.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame({
+                "id": [1, 2, 3, 4, 5],
+                "species": [f"Taxon_{i+1}" for i in range(5)],
+            }).to_csv(mapping, index=False)
+        original = _table(mapping);inputs.append(mapping)
         identity = validate_taxonomy_identity(original,original,require_model_label=False)
         if not identity['mapping_integrity_ok']:raise ValueError(identity['mapping_errors'])
         if mode == 'audit_existing':
             path = Path(config['taxonomy_path']);taxonomy = _table(path);inputs.append(path)
+        elif mode == 'derive_partial_existing':
+            source = Path(config["taxonomy_path"])
+            if smoke and not source.exists():
+                fix_dir = output / "fixtures"
+                fix_dir.mkdir(parents=True, exist_ok=True)
+                source = fix_dir / "taxonomy_synthetic_partial.parquet"
+                synth_tax = pd.DataFrame({
+                    "id": [1, 2, 3, 4, 5],
+                    "species": [f"Taxon_{i+1}" for i in range(5)],
+                    "Genus": ["Genus_1", "Genus_1", "Genus_2", "Unassigned", None],
+                    "Order": ["Order_1", "Order_1", "Unclassified", "", "Order_2"],
+                    "taxonomy_source": "synthetic",
+                })
+                synth_tax.to_parquet(source, index=False)
+                synth_map = fix_dir / "species_synthetic.csv"
+                synth_tax[["id", "species"]].to_csv(synth_map, index=False)
+                original = _table(synth_map)
+                inputs = [synth_map]
+            taxonomy = _table(source).copy()
+            inputs.append(source)
+            ids = pd.to_numeric(taxonomy["id"], errors="raise")
+            if ids.isna().any() or ids.duplicated().any() or (ids < 1).any():
+                raise ValueError("IDs taxonômicos inválidos ou duplicados")
+            expected = ids.astype("int64") - 1
+            if "model_label" in taxonomy:
+                if not pd.to_numeric(taxonomy["model_label"]).eq(expected).all():
+                    raise ValueError("model_label existente difere de id - 1")
+            else:
+                taxonomy["model_label"] = expected
+            for rank in ("Genus", "Order"):
+                if rank in taxonomy.columns:
+                    values = taxonomy[rank].astype("string").str.strip()
+                    missing = (
+                        values.isna()
+                        | values.eq("").fillna(False)
+                        | values.str.startswith(("Unassigned", "Unclassified"), na=False)
+                    )
+                    taxonomy[rank] = values.mask(missing, pd.NA)
         else:
             path = Path(config['ictv_master']);log_artifact_path('ICTV workbook',path)
             if not path.is_file():raise FileNotFoundError(f'ICTV workbook missing: {path}; select audit_existing explicitly to audit a reference')
@@ -272,8 +318,15 @@ def _curate(config: dict[str, Any], output: Path, smoke: bool) -> tuple[dict[str
             if 'model_label' not in taxonomy:taxonomy['model_label'] = taxonomy.id - 1
         _reject_synthetic_taxonomy(taxonomy,smoke)
         report = validate_taxonomy_identity(taxonomy,original)
+        if mode == 'derive_partial_existing' and not report['mapping_integrity_ok']:
+            raise ValueError(report['mapping_errors'])
     report.update(num_species=len(taxonomy),reconstructed_from_msl=mode=='curate' and not smoke,
                   genome_provenance='unknown',genome_provenance_complete=False,genome_disjoint_test_classes=None)
+    if mode == 'derive_partial_existing':
+        known_ranks = {rank: int(taxonomy[rank].notna().sum()) for rank in ('Genus', 'Order') if rank in taxonomy.columns}
+        unknown_ranks = {rank: int(taxonomy[rank].isna().sum()) for rank in ('Genus', 'Order') if rank in taxonomy.columns}
+        report['known_ranks'] = known_ranks
+        report['unknown_ranks'] = unknown_ranks
     if config.get('overlap_manifest') or config.get('overlap_dir'):
         decision,per,dep = _predecessor(config,smoke)
         inputs += [decision,per,Path(dep['path'])]
@@ -288,6 +341,8 @@ def _curate(config: dict[str, Any], output: Path, smoke: bool) -> tuple[dict[str
     if mode == 'curate':
         if not report['hierarchy_ready']:raise ValueError(f'Taxonomy cannot be published: {report}')
         taxonomy.to_parquet(output/'main_taxonomy_hybrid_CLEANSED.parquet',index=False)
+    elif mode == 'derive_partial_existing':
+        taxonomy.to_parquet(output/'main_taxonomy_hybrid_PARTIAL.parquet',index=False)
     # Duplicate audit remains a diagnostic in 05 when explicit split input is supplied.
     if config.get('splits',{}).get('test'):
         values = config['splits']['test'];values = values if isinstance(values,list) else [values]
@@ -318,7 +373,11 @@ def run_m01(
     if config.get('_plan') and bool(config['_plan']['is_smoke_test']) != is_smoke_test:
         raise ValueError('Mode conflicts with M00 plan')
     run_id,parent,output = _reserve(root,notebook_id,config)
-    protocol = PROTOCOLS.get(notebook_id, 'm01_existing_taxonomy_audit_v1' if config['mode']=='audit_existing' else 'm01_ictv_curate_v1')
+    protocol = PROTOCOLS.get(
+        notebook_id,
+        'm01_existing_partial_derive_v1' if config['mode'] == 'derive_partial_existing'
+        else ('m01_existing_taxonomy_audit_v1' if config['mode'] == 'audit_existing' else 'm01_ictv_curate_v1')
+    )
     clean_config = {k:v for k,v in config.items() if not k.startswith('_')}
     try:
         dirty = bool(subprocess.check_output(['git','status','--porcelain'],cwd=root,stderr=subprocess.DEVNULL).strip())
